@@ -1,0 +1,5 @@
+[tools]
+go = "1.26.4"
+python = "3.12"
+pipenv = "latest"
+"ubi:go-task/task" = "latest"

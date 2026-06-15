@@ -1,0 +1,110 @@
+version: "v1"
+server:
+  address: "0.0.0.0:9001"
+  max_concurrent_streams: 1024
+telemetry:
+  logging:
+    level: "DEBUG"
+    format: "console"
+    output_path: "stdout"
+    development: false
+chains:
+  chain_uuidv4:
+    - type: "correlation_id"
+      options:
+        algorithm: "uuidv4"
+        header_name: "x-request-id"
+        propagate_to_upstream: true
+        propagate_to_downstream: true
+  chain_uuidv7:
+    - type: "correlation_id"
+      options:
+        algorithm: "uuidv7"
+        header_name: "x-request-id-v7"
+        prefix: "v7-"
+  chain_ulid:
+    - type: "correlation_id"
+      options:
+        algorithm: "ulid"
+        header_name: "x-request-id-ulid"
+  chain_xid:
+    - type: "correlation_id"
+      options:
+        algorithm: "xid"
+        header_name: "x-request-id-xid"
+  chain_id_preservation:
+    - type: "correlation_id"
+      options:
+        algorithm: "uuidv4"
+        mode: "if_missing"
+        header_name: "x-correlation-id"
+  chain_id_overwrite:
+    - type: "correlation_id"
+      options:
+        algorithm: "uuidv4"
+        mode: "overwrite"
+        header_name: "x-correlation-id"
+  chain_fallback:
+    - type: "correlation_id"
+      options:
+        algorithm: "uuidv4"
+  chain_advanced_correlation:
+    - type: "correlation_id"
+      options:
+        header_name: "x-internal-id"
+        input_header_name: "x-client-trace"
+        response_header_name: "x-external-correlation"
+        validation_regex: "^[0-9a-f]{8}$"
+        mode: "if_missing"
+  chain_renaming:
+    - type: "correlation_id"
+      options:
+        input_header_name: "x-client-id"
+        header_name: "x-internal-id"
+        response_header_name: "x-final-id"
+  chain_validation_success:
+    - type: "correlation_id"
+      options:
+        validation_regex: "^fixed-[0-9]+$"
+        mode: "if_missing"
+        header_name: "x-request-id"
+  chain_validation_fail:
+    - type: "correlation_id"
+      options:
+        validation_regex: "^valid-.*"
+        algorithm: "uuidv4"
+        prefix: "gen-"
+        header_name: "x-request-id"
+router:
+  routes:
+    - target_chain: "chain_uuidv4"
+      matches:
+        - path_prefix: "/api/test/uuidv4"
+    - target_chain: "chain_uuidv7"
+      matches:
+        - path_prefix: "/api/test/uuidv7"
+    - target_chain: "chain_ulid"
+      matches:
+        - path_prefix: "/api/test/ulid"
+    - target_chain: "chain_xid"
+      matches:
+        - path_prefix: "/api/test/xid"
+    - target_chain: "chain_id_preservation"
+      matches:
+        - path_prefix: "/api/test/preserve"
+    - target_chain: "chain_id_overwrite"
+      matches:
+        - path_prefix: "/api/test/overwrite"
+    - target_chain: "chain_advanced_correlation"
+      matches:
+        - path_prefix: "/api/test/advanced"
+    - target_chain: "chain_renaming"
+      matches:
+        - path_prefix: "/api/test/renaming"
+    - target_chain: "chain_validation_success"
+      matches:
+        - path_prefix: "/api/test/val-ok"
+    - target_chain: "chain_validation_fail"
+      matches:
+        - path_prefix: "/api/test/val-fail"
+  other: "chain_fallback"

@@ -1,0 +1,111 @@
+# ====================================================================
+#   Hyper Gateway Engine — Integration Test Environment
+#   docker-compose.yaml
+#
+#   Services:
+#     1. hyper-engine    – Our Go gRPC authorization engine
+#     2. envoy-proxy     – Envoy API gateway (ext_authz client)
+#     3. backend-service – Echo server (upstream target)
+#
+#   Usage:
+#     The run_tests.sh script copies the scenario config to ./config.yaml
+#     before each docker compose up call.  Do NOT pass CONFIG= here.
+#
+#     Manual single-scenario run:
+#       cp matching/config.yaml ./config.yaml
+#       docker compose up --build -d
+# ====================================================================
+
+# NOTE: The top-level `version` key is obsolete in Compose v2+ and has
+# been intentionally removed to suppress the deprecation warning.
+
+# ---------------------------------------------------------------------------
+# Shared bridge network — all containers resolve each other by service name.
+# ---------------------------------------------------------------------------
+networks:
+  gateway-net:
+    driver: bridge
+
+# ---------------------------------------------------------------------------
+# Services
+# ---------------------------------------------------------------------------
+services:
+
+  # -------------------------------------------------------------------------
+  # 1. hyper-engine
+  #    Our Go gRPC Policy Engine acting as the ext_authz authorization server.
+  #    Listens on port 9001 (gRPC / HTTP2).
+  # -------------------------------------------------------------------------
+  hyper-engine:
+    build:
+      # Dockerfile lives one level above tests/, i.e., the project root.
+      context: ..
+      dockerfile: Dockerfile
+    container_name: hyper-engine
+    restart: unless-stopped
+    ports:
+      - "9001:9001"
+    volumes:
+      # IMPORTANT: Always a fixed ./config.yaml bind-mount.
+      # run_tests.sh copies the correct scenario config here before each run.
+      # A bare relative path without "./" would be misread by Docker Compose
+      # as a named volume reference — always keep the leading "./".
+      - "./config.yaml:/etc/hyper-engine/config.yaml:ro"
+    networks:
+      - gateway-net
+    healthcheck:
+      # Simple TCP probe — works in distroless images without extra tooling.
+      test: [ "CMD-SHELL", "nc -z localhost 9001 || exit 1" ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # -------------------------------------------------------------------------
+  # 2. envoy-proxy
+  #    Envoy API gateway configured as the ext_authz client.
+  #    Accepts HTTP traffic on port 8080, forwards auth decisions to
+  #    hyper-engine:9001, and proxies allowed requests to backend-service.
+  # -------------------------------------------------------------------------
+  envoy-proxy:
+    image: envoyproxy/envoy:v1.28.0
+    container_name: envoy-proxy
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - "./envoy.yaml:/etc/envoy/envoy.yaml:ro"
+    command: [ "-c", "/etc/envoy/envoy.yaml", "--log-level", "info" ]
+    depends_on:
+      hyper-engine:
+        condition: service_healthy
+    networks:
+      - gateway-net
+
+  # -------------------------------------------------------------------------
+  # 3. backend-service
+  #    Lightweight echo server (ealen/echo-server) that reflects all received
+  #    request headers in its JSON response body — ideal for asserting that
+  #    Envoy correctly injected or stripped headers per chain logic.
+  # -------------------------------------------------------------------------
+  backend-service:
+    image: ealen/echo-server:latest
+    container_name: backend-service
+    restart: unless-stopped
+    ports:
+      - "8082:80"
+    networks:
+      - gateway-net
+
+  # -------------------------------------------------------------------------
+  # 4. redis
+  #    Lightweight Redis instance for rate limiting.
+  # -------------------------------------------------------------------------
+  redis:
+    image: redis:6-alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - gateway-net
