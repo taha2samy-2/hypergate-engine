@@ -337,3 +337,138 @@ def test_malicious_cost_defense(session, get_response_headers):
 
     # 5 (previous remaining) - 1 (fallback cost) = 4 remaining.
     assert remaining == 4
+
+
+
+
+def test_composite_role_limits(session, get_response_headers):
+    """
+    Integration test verifying composite-key rate limiting (Role + Billing Cycle).
+    Validates specific limits for 'manager' (30/min), 'client' (10/min),
+    and the 'OTHER' fallback rule (5/min), as well as post-window reset recovery.
+    """
+    # Defensive check: Wait for a clean minute boundary to prevent transient window splits
+    current_sec = time.localtime().tm_sec
+    wait_time = (60 - current_sec) % 60
+    if wait_time < 5:
+        wait_time += 60
+    time.sleep(wait_time)
+
+    # 1. Verify Client limit (10 requests per minute)
+    client_headers = {
+        "X-User-Role": "client",
+        "X-Billing-Cycle": "cycle-1"
+    }
+    for i in range(10):
+        resp = session.get(f"{BASE_URL}/composite", headers=client_headers, timeout=REQUEST_TIMEOUT)
+        assert resp.status_code == 200, f"Client request {i+1} unexpectedly blocked"
+        headers = get_response_headers(resp)
+        remaining = int(headers.get("ratelimit-remaining"))
+        assert remaining == 10 - (i + 1), f"Expected remaining {10 - (i+1)}, got {remaining}"
+
+    # 11th request must be blocked
+    resp = session.get(f"{BASE_URL}/composite", headers=client_headers, timeout=REQUEST_TIMEOUT)
+    assert resp.status_code == 429, "Client should be blocked on the 11th request"
+
+    # 2. Verify Manager limit (30 requests per minute)
+    manager_headers = {
+        "X-User-Role": "manager",
+        "X-Billing-Cycle": "cycle-2"
+    }
+    for i in range(30):
+        resp = session.get(f"{BASE_URL}/composite", headers=manager_headers, timeout=REQUEST_TIMEOUT)
+        assert resp.status_code == 200, f"Manager request {i+1} unexpectedly blocked"
+        headers = get_response_headers(resp)
+        remaining = int(headers.get("ratelimit-remaining"))
+        assert remaining == 30 - (i + 1), f"Expected remaining {30 - (i+1)}, got {remaining}"
+
+    # 31st request must be blocked
+    resp = session.get(f"{BASE_URL}/composite", headers=manager_headers, timeout=REQUEST_TIMEOUT)
+    assert resp.status_code == 429, "Manager should be blocked on the 31st request"
+
+    # 3. Verify Fallback / OTHER limit (5 requests per minute for undefined roles like 'guest')
+    fallback_headers = {
+        "X-User-Role": "guest",
+        "X-Billing-Cycle": "cycle-3"
+    }
+    for i in range(5):
+        resp = session.get(f"{BASE_URL}/composite", headers=fallback_headers, timeout=REQUEST_TIMEOUT)
+        assert resp.status_code == 200, f"Fallback request {i+1} unexpectedly blocked"
+        headers = get_response_headers(resp)
+        remaining = int(headers.get("ratelimit-remaining"))
+        assert remaining == 5 - (i + 1), f"Expected remaining {5 - (i+1)}, got {remaining}"
+
+    # 6th request must be blocked
+    resp = session.get(f"{BASE_URL}/composite", headers=fallback_headers, timeout=REQUEST_TIMEOUT)
+    assert resp.status_code == 429, "Fallback should be blocked on the 6th request"
+
+    # 4. Wait for the window boundary to slide and reset
+    time.sleep(60)
+
+    # 5. Verify reset (client can successfully request again with renewed limit)
+    resp = session.get(f"{BASE_URL}/composite", headers=client_headers, timeout=REQUEST_TIMEOUT)
+    assert resp.status_code == 200, "Request failed after rate limit window reset"
+    headers = get_response_headers(resp)
+    assert int(headers.get("ratelimit-remaining")) == 9
+
+
+def test_composite_sliding_limits(session, get_response_headers):
+    """
+    Integration test verifying composite-key rate limiting (Role + Billing Cycle)
+    using the stateful Sliding Window Counter algorithm.
+    Validates limits for 'manager' (20/min), 'client' (5/min), and 'OTHER' (2/min).
+    """
+    current_sec = time.localtime().tm_sec
+    wait_time = (60 - current_sec) % 60
+    if wait_time < 5:
+        wait_time += 60
+    time.sleep(wait_time)
+
+    client_headers = {
+        "X-User-Role": "client",
+        "X-Billing-Cycle": "cycle-99"
+    }
+    for i in range(5):
+        resp = session.get(f"{BASE_URL}/composite_sliding", headers=client_headers, timeout=REQUEST_TIMEOUT)
+        assert resp.status_code == 200, f"Client sliding request {i+1} unexpectedly blocked"
+        headers = get_response_headers(resp)
+        remaining = int(headers.get("ratelimit-remaining"))
+        assert remaining == 5 - (i + 1), f"Expected remaining {5 - (i+1)}, got {remaining}"
+
+    resp = session.get(f"{BASE_URL}/composite_sliding", headers=client_headers, timeout=REQUEST_TIMEOUT)
+    assert resp.status_code == 429, "Client should be blocked on the 6th sliding request"
+
+    manager_headers = {
+        "X-User-Role": "manager",
+        "X-Billing-Cycle": "cycle-88"
+    }
+    for i in range(20):
+        resp = session.get(f"{BASE_URL}/composite_sliding", headers=manager_headers, timeout=REQUEST_TIMEOUT)
+        assert resp.status_code == 200, f"Manager sliding request {i+1} unexpectedly blocked"
+        headers = get_response_headers(resp)
+        remaining = int(headers.get("ratelimit-remaining"))
+        assert remaining == 20 - (i + 1), f"Expected remaining {20 - (i+1)}, got {remaining}"
+
+    resp = session.get(f"{BASE_URL}/composite_sliding", headers=manager_headers, timeout=REQUEST_TIMEOUT)
+    assert resp.status_code == 429, "Manager should be blocked on the 21st sliding request"
+
+    fallback_headers = {
+        "X-User-Role": "operator",
+        "X-Billing-Cycle": "cycle-77"
+    }
+    for i in range(2):
+        resp = session.get(f"{BASE_URL}/composite_sliding", headers=fallback_headers, timeout=REQUEST_TIMEOUT)
+        assert resp.status_code == 200, f"Fallback sliding request {i+1} unexpectedly blocked"
+        headers = get_response_headers(resp)
+        remaining = int(headers.get("ratelimit-remaining"))
+        assert remaining == 2 - (i + 1), f"Expected remaining {2 - (i+1)}, got {remaining}"
+
+    resp = session.get(f"{BASE_URL}/composite_sliding", headers=fallback_headers, timeout=REQUEST_TIMEOUT)
+    assert resp.status_code == 429, "Fallback should be blocked on the 3rd sliding request"
+
+    # FIXED: Sleep 75s instead of 60s to allow the sliding weight to decay enough
+    # for the stateful sliding window counter to allow a new request.
+    time.sleep(75)
+
+    resp = session.get(f"{BASE_URL}/composite_sliding", headers=client_headers, timeout=REQUEST_TIMEOUT)
+    assert resp.status_code == 200, "Sliding request failed after rate limit window reset"

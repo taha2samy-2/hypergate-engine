@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +24,6 @@ type slidingWindowExecutor struct {
 	localCache *freecache.Cache // Embedded L1 cache bypass
 	scriptSha1 string
 	luaBody    string
-	policies   map[string]YamlDescriptor
 }
 
 // getSlidingLuaScriptBody implements an atomic check-then-increment sliding window counter.
@@ -44,7 +44,6 @@ local estimated_count = math.ceil(previous_count * weight + current_count)
 if estimated_count + cost <= limit then
     redis.call('INCRBY', current_key, cost)
     redis.call('EXPIRE', current_key, ttl)
-    -- FIXED: Remaining quota must account for the sliding window estimation
     return {1, limit - (estimated_count + cost)}
 else
     return {0, limit - estimated_count}
@@ -52,16 +51,32 @@ end
 `
 }
 
+// NewSlidingWindowExecutor compiles the Lua script and instantiates a high-performance sliding window counter.
+// It pre-sorts configured descriptors to prioritize specific (value-based) rules over generic fallback ones.
 func NewSlidingWindowExecutor(client redis.Client, opts FilterOptions, localCache *freecache.Cache) RateLimitExecutor {
 	body := getSlidingLuaScriptBody()
 	hasher := sha1.New()
 	hasher.Write([]byte(body))
 	sha := hex.EncodeToString(hasher.Sum(nil))
 
-	policies := make(map[string]YamlDescriptor, len(opts.Descriptors))
-	for _, d := range opts.Descriptors {
-		policies[d.Key] = d
-	}
+	// Pre-sort descriptors: Most Specific Rules (with explicit values) must come BEFORE generic/wildcard rules (OTHER)
+	sort.Slice(opts.Descriptors, func(i, j int) bool {
+		countI, countJ := 0, 0
+		for _, entry := range opts.Descriptors[i].Entries {
+			if entry.Value != "" {
+				countI++
+			}
+		}
+		for _, entry := range opts.Descriptors[j].Entries {
+			if entry.Value != "" {
+				countJ++
+			}
+		}
+		if len(opts.Descriptors[i].Entries) != len(opts.Descriptors[j].Entries) {
+			return len(opts.Descriptors[i].Entries) > len(opts.Descriptors[j].Entries)
+		}
+		return countI > countJ
+	})
 
 	return &slidingWindowExecutor{
 		client:     client,
@@ -69,46 +84,92 @@ func NewSlidingWindowExecutor(client redis.Client, opts FilterOptions, localCach
 		localCache: localCache,
 		scriptSha1: sha,
 		luaBody:    body,
-		policies:   policies,
 	}
 }
 
+// Evaluate processes the extracted request headers against the compiled composite sliding window policies.
 func (e *slidingWindowExecutor) Evaluate(ctx context.Context, descriptors []DescriptorEntry, cost int64) (Decision, error) {
 	var finalDecision Decision
-	finalDecision.LimitRemaining = ^uint32(0) // Max uint32 for tracking the lowest limit remaining
+	finalDecision.LimitRemaining = ^uint32(0) // Start with max uint32 for tracking the lowest limit remaining
 
 	now := time.Now().Unix()
 	var batchBuf [1024]byte
 	offset := 0
 
+	// Map extracted client descriptor keys to their runtime values for O(1) lookup complexity
+	extracted := make(map[string]string, len(descriptors))
 	for _, entry := range descriptors {
-		policy, ok := e.policies[entry.Key]
-		if !ok {
-			continue // No policy mapped for this descriptor
+		extracted[entry.Key] = entry.Value
+	}
+
+	// Track evaluated dimensions (e.g., "role_cycle") to short-circuit and prevent
+	// evaluating less-specific fallback/OTHER policies of the same key combination in a single request.
+	evaluatedDimensions := make(map[string]bool, len(e.options.Descriptors))
+
+	// Iterate through the pre-sorted configured policies (First Match Wins for each rate-limiting dimension)
+	for _, policy := range e.options.Descriptors {
+		// Construct the unique dimension signature for this policy (e.g., "role_cycle")
+		var dimBuf [128]byte
+		db := dimBuf[:0]
+		for i, entry := range policy.Entries {
+			if i > 0 {
+				db = append(db, '_')
+			}
+			db = append(db, entry.Key...)
+		}
+		dimension := unsafe.String(unsafe.SliceData(db), len(db))
+
+		// Short-circuit: Skip if a more specific policy for this exact dimension has already been processed
+		if evaluatedDimensions[dimension] {
+			continue
 		}
 
+		matched := true
+
+		// Verify if the request satisfies all conditions (Entries) of this composite policy
+		for _, entry := range policy.Entries {
+			clientVal, exists := extracted[entry.Key]
+			if !exists {
+				matched = false
+				break
+			}
+			if entry.Value != "" && entry.Value != clientVal {
+				matched = false
+				break
+			}
+		}
+
+		if !matched {
+			continue // Skip to next policy if conditions are not met
+		}
+
+		// Mark this dimension as evaluated so that weaker fallback policies of this dimension are ignored
+		evaluatedDimensions[dimension] = true
+
+		// getDivider is resolved package-wide from fixed_window.go
 		windowSize := getDivider(policy.Unit)
 		currentRoundedTimestamp := (now / windowSize) * windowSize
 		previousRoundedTimestamp := currentRoundedTimestamp - windowSize
 
-		val := entry.Value
-		if policy.ShareThresholdPattern != "" {
-			val = policy.ShareThresholdPattern
+		// 1. Zero-Allocation Composite Key Generation with Hash Tag Pinning {...}
+		// Hash Tag enclosing is mandatory to force both keys to reside on the same Redis Cluster shard.
+		estimatedSize := (len(e.options.Domain) + 30) * 2
+		for _, entry := range policy.Entries {
+			estimatedSize += (len(entry.Key) + len(extracted[entry.Key]) + 2) * 2
 		}
 
-		// 1. Dual-Key Generation with Wildcard Support and safe fallback
-		// Sizing includes '{' and '}' for Redis Cluster Hash Tags
-		estimatedSize := (len(e.options.Domain) + len(entry.Key) + len(val) + 30) * 2
 		var currentKeyStr, previousKeyStr string
 
 		if offset+estimatedSize <= len(batchBuf) {
 			bufC := batchBuf[offset:offset]
 			bufC = append(bufC, '{') // Hash Tag Start
 			bufC = append(bufC, e.options.Domain...)
-			bufC = append(bufC, '_')
-			bufC = append(bufC, entry.Key...)
-			bufC = append(bufC, '_')
-			bufC = append(bufC, val...)
+			for _, entry := range policy.Entries {
+				bufC = append(bufC, '_')
+				bufC = append(bufC, entry.Key...)
+				bufC = append(bufC, '_')
+				bufC = append(bufC, extracted[entry.Key]...)
+			}
 			bufC = append(bufC, '}') // Hash Tag End
 			bufC = append(bufC, '_')
 			prefixLen := len(bufC)
@@ -123,15 +184,16 @@ func (e *slidingWindowExecutor) Evaluate(ctx context.Context, descriptors []Desc
 			previousKeyStr = unsafe.String(unsafe.SliceData(bufP), len(bufP))
 			offset += len(bufP)
 		} else {
-			// Fallback allocation if descriptors are huge
 			bufC := make([]byte, 0, estimatedSize/2)
 			bufC = append(bufC, '{')
 			bufC = append(bufC, e.options.Domain...)
+			for _, entry := range policy.Entries {
+				bufC = append(bufC, '_')
+				bufC = append(bufC, entry.Key...)
+				bufC = append(bufC, '_')
+				bufC = append(bufC, extracted[entry.Key]...)
+			}
 			bufC = append(bufC, '}')
-			bufC = append(bufC, '_')
-			bufC = append(bufC, entry.Key...)
-			bufC = append(bufC, '_')
-			bufC = append(bufC, val...)
 			bufC = append(bufC, '_')
 			prefixBytes := make([]byte, len(bufC))
 			copy(prefixBytes, bufC)
@@ -156,12 +218,12 @@ func (e *slidingWindowExecutor) Evaluate(ctx context.Context, descriptors []Desc
 			}
 		}
 
-		// 3. Calculate sliding window parameters
+		// 3. Sliding window parameter calculations
 		elapsed := now % windowSize
 		weight := float64(windowSize-elapsed) / float64(windowSize)
 		ttlSeconds := 2 * windowSize
 
-		// 4. Format string arguments for Lua engine
+		// 4. Format string arguments for Lua execution
 		limitStr := strconv.FormatUint(uint64(policy.Limit), 10)
 		costStr := strconv.FormatInt(cost, 10)
 		weightStr := strconv.FormatFloat(weight, 'f', 4, 64)
@@ -169,10 +231,10 @@ func (e *slidingWindowExecutor) Evaluate(ctx context.Context, descriptors []Desc
 
 		var result []interface{}
 
-		// 5. Execute atomic check-then-increment script via EVALSHA
+		// Execute atomic check-then-increment script via EVALSHA
 		err := e.client.DoCmd(&result, "EVALSHA", "", e.scriptSha1, "2", currentKeyStr, previousKeyStr, limitStr, costStr, weightStr, ttlStr)
 
-		// Fallback state machine if script is not pre-loaded (NOSCRIPT)
+		// NOSCRIPT Fallback Loop
 		if err != nil && strings.Contains(err.Error(), "NOSCRIPT") {
 			var newSha string
 			errLoad := e.client.DoCmd(&newSha, "SCRIPT", "", "LOAD", e.luaBody)
@@ -201,7 +263,7 @@ func (e *slidingWindowExecutor) Evaluate(ctx context.Context, descriptors []Desc
 			return Decision{}, fmt.Errorf("invalid lua script response length")
 		}
 
-		// 6. Parse Lua Response: {allowed (1/0), remaining_quota}
+		// Parse Lua Response: {allowed (1/0), remaining_quota}
 		var allowed int64
 		if a, ok := result[0].(int64); ok {
 			allowed = a
@@ -215,7 +277,7 @@ func (e *slidingWindowExecutor) Evaluate(ctx context.Context, descriptors []Desc
 
 		resetSeconds := windowSize - elapsed
 
-		// 7. Decision Mapping
+		// 5. Decision Mapping & Cache Enforcement
 		if allowed == 0 { // Blocked
 			if policy.ShadowMode {
 				mylogger.Debug("Sliding window metric: ShadowMode violation", zap.String("key", currentKeyStr))
@@ -227,7 +289,7 @@ func (e *slidingWindowExecutor) Evaluate(ctx context.Context, descriptors []Desc
 				continue
 			}
 
-			// Add blocked key to L1 local cache
+			// Add blocked key to L1 local cache to protect Redis from brute-force DDoS
 			if e.localCache != nil && resetSeconds > 0 {
 				_ = e.localCache.Set(unsafe.Slice(unsafe.StringData(currentKeyStr), len(currentKeyStr)), []byte{1}, int(resetSeconds))
 			}

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,9 +24,9 @@ type leakyBucketExecutor struct {
 	localCache *freecache.Cache
 	scriptSha1 string
 	luaBody    string
-	policies   map[string]YamlDescriptor
 }
 
+// getLeakyLuaScriptBody returns the atomic Lua script to evaluate leaky bucket limit checks.
 func getLeakyLuaScriptBody() string {
 	return `
 local key = KEYS[1]
@@ -71,16 +72,33 @@ end
 return {allowed, water, math.ceil(reset_duration)}
 `
 }
+
+// NewLeakyBucketExecutor compiles the Lua script and instantiates a high-performance leaky bucket rate limiter.
+// It pre-sorts configured descriptors to prioritize specific (value-based) rules over generic fallback ones.
 func NewLeakyBucketExecutor(client redis.Client, opts FilterOptions, localCache *freecache.Cache) RateLimitExecutor {
 	body := getLeakyLuaScriptBody()
 	hasher := sha1.New()
 	hasher.Write([]byte(body))
 	sha := hex.EncodeToString(hasher.Sum(nil))
 
-	policies := make(map[string]YamlDescriptor, len(opts.Descriptors))
-	for _, d := range opts.Descriptors {
-		policies[d.Key] = d
-	}
+	// Pre-sort descriptors: Most Specific Rules (with explicit values) must come BEFORE generic/wildcard rules (OTHER)
+	sort.Slice(opts.Descriptors, func(i, j int) bool {
+		countI, countJ := 0, 0
+		for _, entry := range opts.Descriptors[i].Entries {
+			if entry.Value != "" {
+				countI++
+			}
+		}
+		for _, entry := range opts.Descriptors[j].Entries {
+			if entry.Value != "" {
+				countJ++
+			}
+		}
+		if len(opts.Descriptors[i].Entries) != len(opts.Descriptors[j].Entries) {
+			return len(opts.Descriptors[i].Entries) > len(opts.Descriptors[j].Entries)
+		}
+		return countI > countJ
+	})
 
 	return &leakyBucketExecutor{
 		client:     client,
@@ -88,24 +106,70 @@ func NewLeakyBucketExecutor(client redis.Client, opts FilterOptions, localCache 
 		localCache: localCache,
 		scriptSha1: sha,
 		luaBody:    body,
-		policies:   policies,
 	}
 }
 
+// Evaluate processes the extracted request headers against the compiled composite leaky bucket policies.
 func (e *leakyBucketExecutor) Evaluate(ctx context.Context, descriptors []DescriptorEntry, cost int64) (Decision, error) {
 	var finalDecision Decision
 	finalDecision.LimitRemaining = ^uint32(0)
 
+	// Use highly precise float64 timestamp for sub-millisecond leak calculations in Lua
 	nowFloat := float64(time.Now().UnixNano()) / float64(time.Second)
 	var batchBuf [512]byte
 	offset := 0
 
+	// Map extracted client descriptor keys to their runtime values for O(1) lookup complexity
+	extracted := make(map[string]string, len(descriptors))
 	for _, entry := range descriptors {
-		policy, ok := e.policies[entry.Key]
-		if !ok {
+		extracted[entry.Key] = entry.Value
+	}
+
+	// Track evaluated dimensions (e.g., "role_cycle") to short-circuit and prevent
+	// evaluating less-specific fallback/OTHER policies of the same key combination in a single request.
+	evaluatedDimensions := make(map[string]bool, len(e.options.Descriptors))
+
+	// Iterate through the pre-sorted configured policies (First Match Wins for each rate-limiting dimension)
+	for _, policy := range e.options.Descriptors {
+		// Construct the unique dimension signature for this policy (e.g., "role_cycle")
+		var dimBuf [128]byte
+		db := dimBuf[:0]
+		for i, entry := range policy.Entries {
+			if i > 0 {
+				db = append(db, '_')
+			}
+			db = append(db, entry.Key...)
+		}
+		dimension := unsafe.String(unsafe.SliceData(db), len(db))
+
+		// Short-circuit: Skip if a more specific policy for this exact dimension has already been processed
+		if evaluatedDimensions[dimension] {
 			continue
 		}
 
+		matched := true
+
+		// Verify if the request satisfies all conditions (Entries) of this composite policy
+		for _, entry := range policy.Entries {
+			clientVal, exists := extracted[entry.Key]
+			if !exists {
+				matched = false
+				break
+			}
+			if entry.Value != "" && entry.Value != clientVal {
+				matched = false
+				break
+			}
+		}
+
+		if !matched {
+			continue // Skip to next policy if conditions are not met
+		}
+
+		// Mark this dimension as evaluated so that weaker fallback policies of this dimension are ignored
+		evaluatedDimensions[dimension] = true
+
+		// getDivider is resolved package-wide from fixed_window.go
 		divider := float64(getDivider(policy.Unit))
 		leakRatePerSecond := policy.LeakRate / divider
 		ttlSeconds := int64(0)
@@ -116,13 +180,12 @@ func (e *leakyBucketExecutor) Evaluate(ctx context.Context, descriptors []Descri
 			ttlSeconds = 60 // Fallback minimum TTL
 		}
 
-		val := entry.Value
-		if policy.ShareThresholdPattern != "" {
-			val = policy.ShareThresholdPattern
+		// 1. Zero-Allocation Composite Key Generation (with _leaky_queue suffix)
+		estimatedSize := len(e.options.Domain) + len("_leaky_queue") + 30
+		for _, entry := range policy.Entries {
+			estimatedSize += len(entry.Key) + len(extracted[entry.Key]) + 2
 		}
 
-		// 1. Zero-Alloc Key Generation with safe fallback
-		estimatedSize := len(e.options.Domain) + len(entry.Key) + len(val) + len("_leaky_queue") + 30
 		var keyStr string
 		var buf []byte
 
@@ -130,26 +193,31 @@ func (e *leakyBucketExecutor) Evaluate(ctx context.Context, descriptors []Descri
 			buf = batchBuf[offset : offset : offset+estimatedSize]
 			buf = append(buf, e.options.Domain...)
 			buf = append(buf, '_')
-			buf = append(buf, entry.Key...)
-			buf = append(buf, '_')
-			buf = append(buf, val...)
-			buf = append(buf, "_leaky_queue"...)
+			for _, entry := range policy.Entries {
+				buf = append(buf, entry.Key...)
+				buf = append(buf, '_')
+				buf = append(buf, extracted[entry.Key]...)
+				buf = append(buf, '_')
+			}
+			buf = append(buf, "leaky_queue"...)
 
 			keyStr = unsafe.String(unsafe.SliceData(buf), len(buf))
 			offset += len(buf)
 		} else {
 			buf = make([]byte, 0, estimatedSize)
 			buf = append(buf, e.options.Domain...)
-			buf = append(buf, '_')
-			buf = append(buf, entry.Key...)
-			buf = append(buf, '_')
-			buf = append(buf, val...)
+			for _, entry := range policy.Entries {
+				buf = append(buf, '_')
+				buf = append(buf, entry.Key...)
+				buf = append(buf, '_')
+				buf = append(buf, extracted[entry.Key]...)
+			}
 			buf = append(buf, "_leaky_queue"...)
 
 			keyStr = string(buf)
 		}
 
-		// 2. L1 Local Cache Fast-Bypass
+		// 2. L1 Local Cache Fast-Bypass Check
 		if e.localCache != nil {
 			if _, err := e.localCache.Get(buf); err == nil {
 				mylogger.Debug("L1 cache hit: request blocked", zap.String("key", keyStr))
@@ -162,7 +230,7 @@ func (e *leakyBucketExecutor) Evaluate(ctx context.Context, descriptors []Descri
 			}
 		}
 
-		// 3. radix/v4 EVALSHA Execution & Fallback State Machine
+		// 3. Redis EVALSHA Execution & Fallback State Machine
 		capacityStr := strconv.FormatUint(uint64(policy.BucketCapacity), 10)
 		leakRateStr := strconv.FormatFloat(leakRatePerSecond, 'f', -1, 64)
 		costStr := strconv.FormatInt(cost, 10)
@@ -171,7 +239,7 @@ func (e *leakyBucketExecutor) Evaluate(ctx context.Context, descriptors []Descri
 
 		var result []interface{}
 
-		// Attempt EVALSHA
+		// Attempt atomic execution using pre-compiled SHA
 		err := e.client.DoCmd(&result, "EVALSHA", "", e.scriptSha1, "1", keyStr, capacityStr, leakRateStr, costStr, nowStr, ttlStr)
 
 		// NOSCRIPT Fallback Loop
@@ -188,9 +256,7 @@ func (e *leakyBucketExecutor) Evaluate(ctx context.Context, descriptors []Descri
 				return Decision{}, fmt.Errorf("failed to SCRIPT LOAD Lua leaky bucket rate limiter: %w", errLoad)
 			}
 
-			e.scriptSha1 = newSha // Update stored SHA locally
-
-			// Re-execute EVALSHA
+			e.scriptSha1 = newSha // Update stored SHA locally for subsequent executions
 			err = e.client.DoCmd(&result, "EVALSHA", "", e.scriptSha1, "1", keyStr, capacityStr, leakRateStr, costStr, nowStr, ttlStr)
 		}
 
@@ -202,7 +268,7 @@ func (e *leakyBucketExecutor) Evaluate(ctx context.Context, descriptors []Descri
 			return Decision{}, fmt.Errorf("redis leaky bucket fail for key %s: %w", keyStr, err)
 		}
 
-		// Parse the Lua response: {allowed (0/1), water (float), reset_duration (int)}
+		// Parse the Lua response array: {allowed (0/1), water (float/bytes), reset_duration (int)}
 		if len(result) < 3 {
 			mylogger.Error("Invalid Lua script response length", zap.Any("result", result))
 			if policy.FailOpen {
@@ -234,7 +300,7 @@ func (e *leakyBucketExecutor) Evaluate(ctx context.Context, descriptors []Descri
 			remainingCapacity = uint32(float64(policy.BucketCapacity) - waterFloat)
 		}
 
-		// 4. Metrics & Decision Mapping
+		// 4. Decision Enforcement & Cache Injection
 		if allowed == 0 {
 			if policy.ShadowMode {
 				mylogger.Debug("Leaky Bucket metric: ShadowMode violation", zap.String("key", keyStr))
@@ -246,6 +312,7 @@ func (e *leakyBucketExecutor) Evaluate(ctx context.Context, descriptors []Descri
 				continue
 			}
 
+			// Blocked: Inject into L1 cache to protect downstream Redis infrastructure
 			if e.localCache != nil && resetDuration > 0 {
 				if remainingCapacity == 0 || cost == 1 {
 					_ = e.localCache.Set(buf, []byte{1}, int(resetDuration))
@@ -260,7 +327,7 @@ func (e *leakyBucketExecutor) Evaluate(ctx context.Context, descriptors []Descri
 			}, nil
 		}
 
-		// Allowed
+		// Allowed request
 		mylogger.Debug("Leaky Bucket metric: WithinLimit", zap.String("key", keyStr), zap.Uint32("remaining", remainingCapacity))
 		if remainingCapacity < finalDecision.LimitRemaining {
 			finalDecision.LimitRemaining = remainingCapacity

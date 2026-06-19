@@ -20,7 +20,6 @@ redis:
 
 chains:
 
-
   chain_domino_effect:
     - type: "header_modifier"
       options:
@@ -41,7 +40,8 @@ chains:
           default_fallback_cost: 1
           max_allowed_cost: 50
         descriptors:
-          - key: "client_ip"
+          - entries:
+              - key: "client_ip"
             limit: 20
             unit: "minute"
 
@@ -76,7 +76,8 @@ chains:
           default_fallback_cost: 1
           max_allowed_cost: 100
         descriptors:
-          - key: "client_ip"
+          - entries:
+              - key: "client_ip"
             max_tokens: 10
             fill_rate: 1
 
@@ -92,7 +93,8 @@ chains:
           remaining_header: "RateLimit-Remaining"
           reset_header: "RateLimit-Reset"
         descriptors:
-          - key: "client_ip"
+          - entries:
+              - key: "client_ip"
             limit: 5
             unit: "second"
             fail_open: false
@@ -104,7 +106,8 @@ chains:
         algorithm: "fixed_window"
         redis_service: "myredis"
         descriptors:
-          - key: "client_ip"
+          - entries:
+              - key: "client_ip"
             limit: 5
             unit: "second"
             fail_open: true
@@ -121,7 +124,8 @@ chains:
           remaining_header: "RateLimit-Remaining"
           reset_header: "RateLimit-Reset"
         descriptors:
-          - key: "client_ip"
+          - entries:
+              - key: "client_ip"
             limit: 10
             unit: "minute"
 
@@ -132,7 +136,8 @@ chains:
         algorithm: "leaky_bucket"
         redis_service: "myredis"
         descriptors:
-          - key: "client_ip"
+          - entries:
+              - key: "client_ip"
             bucket_capacity: 10
             leak_rate: 1
             unit: "second"
@@ -144,7 +149,8 @@ chains:
         algorithm: "fixed_window"
         redis_service: "myredis"
         descriptors:
-          - key: "client_ip"
+          - entries:
+              - key: "client_ip"
             limit: 20
             unit: "minute"
 
@@ -159,9 +165,9 @@ chains:
           limit_header: "RateLimit-Limit"
           remaining_header: "RateLimit-Remaining"
           reset_header: "RateLimit-Reset"
-
         descriptors:
-          - key: "client_ip"
+          - entries:
+              - key: "client_ip"
             limit: 20
             unit: "minute"
 
@@ -177,11 +183,12 @@ chains:
           remaining_header: "RateLimit-Remaining"
           reset_header: "RateLimit-Reset"
         descriptors:
-          - key: "client_ip"
+          - entries:
+              - key: "client_ip"
             limit: 5
             unit: "second"
 
-# Policy to test 'Shadow Mode' functionality in rate limiting.
+  # Policy to test 'Shadow Mode' functionality in rate limiting.
   # Requests exceeding the limit will still pass (200 OK) but
   # rate limit headers will reflect that the limit has been hit.
   chain_shadow_mode_test:
@@ -193,11 +200,11 @@ chains:
         response_headers:
           enabled: true # Crucial for observing remaining limits.
         descriptors:
-          - key: "client_ip"
+          - entries:
+              - key: "client_ip"
             limit: 5          # A small limit to easily trigger overage.
             unit: "second"
-            shadow_mode: true # This is the key: enable shadow mode!```
-
+            shadow_mode: true # This is the key: enable shadow mode!
 
   chain_malicious_cost_test:
     - type: "embedded_rate_limiter"
@@ -213,22 +220,95 @@ chains:
           default_fallback_cost: 1 # Safe default if string is malformed or invalid.
           max_allowed_cost: 5       # Hard ceiling to prevent out-of-bound depletion.
         descriptors:
-          - key: "client_ip"
+          - entries:
+              - key: "client_ip"
             max_tokens: 10
             fill_rate: 1
 
+  chain_composite_roles:
+    - type: "embedded_rate_limiter"
+      options:
+        domain: "test_composite"
+        algorithm: "fixed_window"
+        redis_service: "myredis"
+        response_headers:
+          enabled: true
+        header_mappings:
+          "role": "X-User-Role"
+          "cycle": "X-Billing-Cycle"
+        descriptors:
+          # 1. Specific Rule: Manager (30 requests per minute)
+          - entries:
+              - key: "role"
+                value: "manager"
+              - key: "cycle"
+            limit: 30
+            unit: "minute"
+
+          # 2. Specific Rule: Client (10 requests per minute)
+          - entries:
+              - key: "role"
+                value: "client"
+              - key: "cycle"
+            limit: 10
+            unit: "minute"
+
+          # 3. Fallback (OTHER) Rule: Any other role/cycle combination (5 requests per minute)
+          - entries:
+              - key: "role"
+              - key: "cycle"
+            limit: 5
+            unit: "minute"
+
+  chain_composite_sliding:
+    - type: "embedded_rate_limiter"
+      options:
+        domain: "test_composite_sliding"
+        algorithm: "sliding_window_counter"
+        redis_service: "myredis"
+        response_headers:
+          enabled: true
+          limit_header: "RateLimit-Limit"
+          remaining_header: "RateLimit-Remaining"
+          reset_header: "RateLimit-Reset"
+        header_mappings:
+          "role": "X-User-Role"
+          "cycle": "X-Billing-Cycle"
+        descriptors:
+          # 1. Specific Rule: Manager (20 requests per minute)
+          - entries:
+              - key: "role"
+                value: "manager"
+              - key: "cycle"
+            limit: 20
+            unit: "minute"
+
+          # 2. Specific Rule: Client (5 requests per minute)
+          - entries:
+              - key: "role"
+                value: "client"
+              - key: "cycle"
+            limit: 5
+            unit: "minute"
+
+          # 3. Fallback (OTHER) Rule: Any other combination (2 requests per minute)
+          - entries:
+              - key: "role"
+              - key: "cycle"
+            limit: 2
+            unit: "minute"
 
 router:
   routes:
     - target_chain: "chain_fixed"
       matches:
         - path_prefix: "/fixed"
-
-
+    - target_chain: "chain_composite_sliding"
+      matches:
+        - path_prefix: "/composite_sliding"
     - target_chain: "chain_sliding_log"
       matches:
         - path_prefix: "/sliding_log"
-
     - target_chain: "chain_integrated"
       matches:
         - path_prefix: "/token"
@@ -241,22 +321,19 @@ router:
     - target_chain: "chain_fixed_limit"
       matches:
         - path_prefix: "/fail_closed"
-
-
     - target_chain: "chain_sliding"
       matches:
         - path_prefix: "/sliding"
-
     - target_chain: "chain_domino_effect"
       matches:
         - path_prefix: "/domino"
-
     - target_chain: "chain_shadow_mode_test"
       matches:
         - path_prefix: "/shadow"
-
     - target_chain: "chain_malicious_cost_test"
       matches:
         - path_prefix: "/malicious_cost"
-
+    - target_chain: "chain_composite_roles"
+      matches:
+        - path_prefix: "/composite"
   other: "chain_fixed_limit"
