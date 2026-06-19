@@ -416,6 +416,7 @@ func ParseOIDCFilterConfig(rawOpts interface{}) (*OIDCFilterConfig, error) {
 // RedisMetadataEnricherConfig holds the configuration for the Redis Metadata Enricher filter.
 type RedisMetadataEnricherConfig struct {
 	RedisService   string              `yaml:"redis_service"`
+	CacheSizeMB    int                 `yaml:"cache_size_mb,omitempty"`
 	CacheTimeout   string              `yaml:"cache_timeout,omitempty"`
 	Variables      map[string]Variable `yaml:"variables"`
 	KeyPattern     string              `yaml:"key_pattern"`

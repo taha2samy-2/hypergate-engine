@@ -36,10 +36,17 @@ type VariableRule struct {
 
 // NewRedisMetadataEnricherFilter instantiates and compiles the advanced metadata enrichment filter.
 // It parses the configurable cache timeout string into a time.Duration at boot-time.
+// NewRedisMetadataEnricherFilter instantiates and compiles the advanced metadata enrichment filter.
+// It dynamically evaluates the cache size and TTL from the configuration, falling back to safe defaults.
 func NewRedisMetadataEnricherFilter(name string, cfg config.RedisMetadataEnricherConfig, client redis.Client) *RedisMetadataEnricherFilter {
-	localCache := freecache.NewCache(10 * 1024 * 1024) // Dedicated 10MB L1 Cache
+	// 1. Calculate dynamic L1 Cache Size (Default is 10MB if omitted or zero)
+	cacheSize := 10 * 1024 * 1024 // 10MB in bytes
+	if cfg.CacheSizeMB > 0 {
+		cacheSize = cfg.CacheSizeMB * 1024 * 1024 // Convert Operator's MB input to Bytes
+	}
+	localCache := freecache.NewCache(cacheSize)
 
-	// Parse the configurable cache timeout, falling back to 10 seconds if omitted or invalid
+	// 2. Calculate dynamic L1 Cache TTL (Default is 10 seconds if omitted or invalid)
 	cacheTTL := 10 * time.Second
 	if cfg.CacheTimeout != "" {
 		if parsed, err := time.ParseDuration(cfg.CacheTimeout); err == nil {
@@ -67,7 +74,7 @@ func NewRedisMetadataEnricherFilter(name string, cfg config.RedisMetadataEnriche
 		keyPattern:    cfg.KeyPattern,
 		client:        client,
 		localCache:    localCache,
-		cacheTTL:      cacheTTL,
+		cacheTTL:      cacheTTL, // Pass the parsed dynamic TTL
 		variables:     compiledVars,
 		outputMapping: cfg.OutputMappings,
 	}
