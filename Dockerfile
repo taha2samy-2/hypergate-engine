@@ -22,5 +22,5 @@ RUN apt-get update && \
 
 # Copy only the compiled binary
 COPY --from=builder /app/hyper-engine /
-
+USER 65532:65532
 ENTRYPOINT ["/hyper-engine"]

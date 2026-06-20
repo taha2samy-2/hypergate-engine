@@ -39,6 +39,6 @@ WORKDIR /
 COPY --from=builder /app/manager .
 
 # Run the container as the non-privileged appuser we created
-USER appuser:appgroup
+USER 65532:65532
 
 ENTRYPOINT ["/manager"]
