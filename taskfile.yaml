@@ -177,3 +177,43 @@ tasks:
         - docker build -t taha/hyper-mock-engine:latest -f mock_engine/Dockerfile.mock mock_engine/
       silent: true
 
+
+  k8s:kind:create:
+    desc: "Create a Kind Kubernetes cluster with 4 nodes"
+    cmds:
+      - kind create cluster --config k8s/kind/kind-config.yaml
+  k8s:kind:delete:
+    desc: "Delete the Kind Kubernetes cluster"
+    cmds:
+      - kind delete cluster
+  k8s:kind:reload:
+    desc: "Delete and recreate the Kind Kubernetes cluster"
+    cmds:
+      - task: k8s:kind:delete
+      - task: k8s:kind:create
+  k8s:gateway:deploy:
+    desc: "Install the official Kubernetes Gateway API CRDs"
+    cmds:
+      - kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/standard-install.yaml
+  k8s:cilium:install:
+    desc: "Install Cilium as the CNI plugin"
+    cmds:
+      - cilium install 
+          --version v1.20.0-pre.3
+          --set k8sServiceHost=my-lab-control-plane 
+          --set k8sServicePort=6443 
+          --set kubeProxyReplacement=true 
+          --set gatewayAPI.enabled=true 
+          --set hostServices.enabled=true 
+          --set externalIPs.enabled=true
+          --set l2announcements.enabled=true
+          --set devices=eth0 
+      - cilium status --wait
+  k8s:cilium:l2policy:
+    desc: "Enable L2 policy mode in Cilium"
+    cmds:
+      - kubectl apply -f k8s/kind/cilium/l2policy.yaml
+  k8s:cilium:pool:
+    desc: "Enable L2 policy mode in Cilium"
+    cmds:
+      - kubectl apply -f k8s/kind/cilium/pool.yaml
