@@ -1,0 +1,11 @@
+apiVersion: infra.hyper.io/v1alpha1
+kind: HyperConfig
+metadata:
+  name: global-engine-config
+spec:
+  serverAddress: "0.0.0.0:9001"
+  maxConcurrentStreams: 1024
+  logLevel: "DEBUG"
+  redisServiceRef: "shared-redis"
+  targetNamespace: "hyper-system"
+  engineImage: "taha/hyper-mock-engine:latest"

@@ -122,3 +122,58 @@ tasks:
     cmds:
       - rm -rf bin/
       - go clean -testcache
+
+
+
+
+  operator:build:
+    desc: "Build the Docker image for hyper-operator"
+    cmds:
+      - docker build -t taha/myprog-operator:latest -f hyper-operator/Dockerfile .
+    silent: true
+
+  operator:deploy:
+    desc: "Deploy the Operator resources, ServiceAccount, Roles, and controllers"
+    cmds:
+      # 1. Apply Namespace, RBAC, and Deployment
+      - kubectl apply -f hyper-operator/deploy/
+      - echo "Checking operator deployment status..."
+      - kubectl rollout status deployment/hyper-operator -n hyper-system --timeout=60s
+    silent: true
+
+  operator:undeploy:
+    desc: "Remove the Operator and all its system resources from the cluster"
+    cmds:
+      - kubectl delete -f hyper-operator/deploy/ --ignore-not-found
+      # Cleanup any remaining dynamic ConfigMaps/DaemonSets
+      - kubectl delete daemonset/hyper-engine -n hyper-system --ignore-not-found
+      - kubectl delete service/hyper-engine-svc -n hyper-system --ignore-not-found
+      - kubectl delete configmap/hyper-engine-config -n hyper-system --ignore-not-found
+      - echo "Operator and associated resources successfully uninstalled"
+    ignore_error: true
+    silent: true
+
+  operator:logs:
+    desc: "Stream live logs from the running hyper-operator pod"
+    cmds:
+      - kubectl logs -f -n hyper-system -l control-plane=controller-manager --tail=100
+    silent: true
+
+  operator:restart:
+    desc: "Rollout restart the hyper-operator deployment"
+    cmds:
+      - kubectl rollout restart deployment/hyper-operator -n hyper-system
+    silent: true
+
+  operator:status:
+    desc: "Check the status of all resources in the hyper-system namespace"
+    cmds:
+      - kubectl get all -n hyper-system
+    silent: true
+
+  mock:build:
+      desc: "Build the Python gRPC Mock Server container"
+      cmds:
+        - docker build -t taha/hyper-mock-engine:latest -f mock_engine/Dockerfile.mock mock_engine/
+      silent: true
+
