@@ -1,0 +1,44 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: hyperconfigs.hyper.io
+spec:
+  group: hyper.io
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: ["redisServiceRef"]
+              properties:
+                serverAddress:
+                  type: string
+                  default: "0.0.0.0:9001"
+                maxConcurrentStreams:
+                  type: integer
+                logLevel:
+                  type: string
+                  enum: ["DEBUG", "INFO", "WARN", "ERROR"]
+                  default: "INFO"
+                targetNamespace:
+                  type: string
+                  default: "hyper-system"
+                engineImage:
+                  type: string
+                  default: "taha/myprog-engine:latest"
+                redisServiceRef:
+                  type: string
+          subresources:
+            status: {}
+      scope: Cluster
+      names:
+        plural: hyperconfigs
+        singular: hyperconfig
+        kind: HyperConfig
+        shortNames:
+          - hc

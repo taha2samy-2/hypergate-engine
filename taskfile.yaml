@@ -138,6 +138,10 @@ tasks:
       # 1. Apply Namespace, RBAC, and Deployment
       - kubectl apply -f hyper-operator/deploy/namespace.yaml
       - kubectl apply -f hyper-operator/deploy/rbac.yaml
+      - kubectl apply -f hyper-operator/deploy/CRDs/hyperconfig_crd.yaml
+      - kubectl apply -f hyper-operator/deploy/CRDs/hyperpolicy_crd.yaml
+      - kubectl apply -f hyper-operator/deploy/CRDs/hyperroute_crd.yaml
+      - kubectl apply -f hyper-operator/deploy/CRDs/hyperredis_crd.yaml
       - kubectl apply -f hyper-operator/deploy/deployment.yaml
       - echo "Checking operator deployment status..."
       - kubectl rollout status deployment/hyper-operator -n hyper-system --timeout=60s
