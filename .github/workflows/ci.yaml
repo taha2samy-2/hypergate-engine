@@ -70,7 +70,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           owner: ${{ github.repository_owner }}
-          packages: 'hyper-engine,hyper-operator,hyper-mock-engine'
+          packages: 'ghcr.io/${{ github.repository_owner }}/hyper-engine,ghcr.io/${{ github.repository_owner }}/hyper-operator,ghcr.io/${{ github.repository_owner }}/hyper-mock-engine'
           delete-untagged: true
           delete-ghost-images: true
           delete-partial-images: true
