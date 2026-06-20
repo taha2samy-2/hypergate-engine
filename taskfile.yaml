@@ -59,6 +59,8 @@ tasks:
       - task: run-scenario
         vars: { NAME: "integrations" }
         ignore_error: true
+      - task: tests:metadata-enrichment
+        ignore_error: true
 
   tests:test-matching:
     desc: "Run matching/boolean logic tests specifically"
@@ -80,5 +82,98 @@ tasks:
     cmds:
       - task: run-scenario
         vars: { NAME: "integrations" }
-    
+  tests:metadata-enrichment:
+    desc: "Run metadata enrichment tests"
+    cmds:
+      - task: run-scenario
+        vars: { NAME: "metadata_enrichment" }
+
+  go:tidy:
+    desc: "Tidy and verify Go module dependencies"
+    cmds:
+      - go mod tidy
+      - go mod verify
+    silent: true
+
+  go:fmt:
+    desc: "Format all Go source files according to style guidelines"
+    cmds:
+      - go fmt ./...
+    silent: true
+
+  go:vet:
+    desc: "Run Go static analysis compiler checks (vet)"
+    cmds:
+      - go vet ./...
+
+  go:generate:
+    desc: "Generate Protobuf and gRPC files using Buf tool"
+    cmds:
+      - buf generate buf.build/envoyproxy/envoy --path envoy/service/auth/v3
+
+  go:build:
+    desc: "Build highly-optimized, stripped Go binary for Linux"
+    cmds:
+      - mkdir -p bin
+      - CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o bin/engine ./cmd/engine
+
+  go:clean:
+    desc: "Clean up built binaries and cached test results"
+    cmds:
+      - rm -rf bin/
+      - go clean -testcache
+
+
+
+
+  operator:build:
+    desc: "Build the Docker image for hyper-operator"
+    cmds:
+      - docker build -t taha/myprog-operator:latest -f hyper-operator/Dockerfile .
+    silent: true
+
+  operator:deploy:
+    desc: "Deploy the Operator resources, ServiceAccount, Roles, and controllers"
+    cmds:
+      # 1. Apply Namespace, RBAC, and Deployment
+      - kubectl apply -f hyper-operator/deploy/
+      - echo "Checking operator deployment status..."
+      - kubectl rollout status deployment/hyper-operator -n hyper-system --timeout=60s
+    silent: true
+
+  operator:undeploy:
+    desc: "Remove the Operator and all its system resources from the cluster"
+    cmds:
+      - kubectl delete -f hyper-operator/deploy/ --ignore-not-found
+      # Cleanup any remaining dynamic ConfigMaps/DaemonSets
+      - kubectl delete daemonset/hyper-engine -n hyper-system --ignore-not-found
+      - kubectl delete service/hyper-engine-svc -n hyper-system --ignore-not-found
+      - kubectl delete configmap/hyper-engine-config -n hyper-system --ignore-not-found
+      - echo "Operator and associated resources successfully uninstalled"
+    ignore_error: true
+    silent: true
+
+  operator:logs:
+    desc: "Stream live logs from the running hyper-operator pod"
+    cmds:
+      - kubectl logs -f -n hyper-system -l control-plane=controller-manager --tail=100
+    silent: true
+
+  operator:restart:
+    desc: "Rollout restart the hyper-operator deployment"
+    cmds:
+      - kubectl rollout restart deployment/hyper-operator -n hyper-system
+    silent: true
+
+  operator:status:
+    desc: "Check the status of all resources in the hyper-system namespace"
+    cmds:
+      - kubectl get all -n hyper-system
+    silent: true
+
+  mock:build:
+      desc: "Build the Python gRPC Mock Server container"
+      cmds:
+        - docker build -t taha/hyper-mock-engine:latest -f mock_engine/Dockerfile.mock mock_engine/
+      silent: true
 

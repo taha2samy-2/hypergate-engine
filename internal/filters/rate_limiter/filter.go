@@ -13,21 +13,30 @@ import (
 )
 
 type contextKey string
+
 const requestIDKey contextKey = "request-id"
+
+type DescriptorEntryDef struct {
+	Key   string `yaml:"key"`
+	Value string `yaml:"value"` // if empy we use it as other or default
+
+}
 
 // YamlDescriptor represents a single descriptor definition from the YAML config.
 type YamlDescriptor struct {
-	Key                        string  `yaml:"key"`
-	Limit                      uint32  `yaml:"limit"`
-	Unit                       string  `yaml:"unit"` // e.g., second, minute, hour, day, week, month, year
-	ShadowMode                 bool    `yaml:"shadow_mode"`
-	StopIncrementWhenOverlimit bool    `yaml:"stop_increment_when_overlimit"`
-	FailOpen                   bool    `yaml:"fail_open"`
-	ShareThresholdPattern      string  `yaml:"share_threshold_pattern"`
-	MaxTokens                  float64 `yaml:"max_tokens"` // For Token Bucket
-	FillRate                   float64 `yaml:"fill_rate"`  // For Token Bucket (tokens per second)
-	BucketCapacity             uint32  `yaml:"bucket_capacity"` // For Leaky Bucket
-	LeakRate                   float64 `yaml:"leak_rate"`       // For Leaky Bucket (requests per second/unit)
+	// Entries holds the slice of key-value criteria that must be matched (AND logic) to apply this limit.
+	// This replaces the legacy single 'Key' field to support multi-key rate-limiting dimensions.
+	Entries                    []DescriptorEntryDef `yaml:"entries"`
+	Limit                      uint32               `yaml:"limit"`
+	Unit                       string               `yaml:"unit"` // e.g., second, minute, hour, day, week, month, year
+	ShadowMode                 bool                 `yaml:"shadow_mode"`
+	StopIncrementWhenOverlimit bool                 `yaml:"stop_increment_when_overlimit"`
+	FailOpen                   bool                 `yaml:"fail_open"`
+	ShareThresholdPattern      string               `yaml:"share_threshold_pattern"`
+	MaxTokens                  float64              `yaml:"max_tokens"`      // For Token Bucket
+	FillRate                   float64              `yaml:"fill_rate"`       // For Token Bucket (tokens per second)
+	BucketCapacity             uint32               `yaml:"bucket_capacity"` // For Leaky Bucket
+	LeakRate                   float64              `yaml:"leak_rate"`       // For Leaky Bucket (requests per second/unit)
 }
 
 // ResponseHeadersOpts defines configuration for injecting rate limit headers downstream.
@@ -69,8 +78,8 @@ func (opts *FilterOptions) ApplyDefaults() {
 		opts.ResponseHeaders.ResetHeader = "RateLimit-Reset"
 	}
 
-	// Pre-lowercase all keys to ensure zero dynamic heap allocations during runtime lookup
-	// when calling context helpers or looking up maps.
+	// Pre-lowercase all keys in HeaderMappings to ensure zero dynamic heap allocations
+	// during runtime lookup when calling context helpers or looking up maps.
 	if opts.HeaderMappings != nil {
 		lowerMappings := make(map[string]string, len(opts.HeaderMappings))
 		for k, v := range opts.HeaderMappings {
@@ -79,8 +88,15 @@ func (opts *FilterOptions) ApplyDefaults() {
 		opts.HeaderMappings = lowerMappings
 	}
 
+	// Pre-lowercase all keys and values defined inside composite descriptors.
+	// This ensures exact, case-insensitive matching during the hot execution path.
 	for i := range opts.Descriptors {
-		opts.Descriptors[i].Key = strings.ToLower(opts.Descriptors[i].Key)
+		for j := range opts.Descriptors[i].Entries {
+			opts.Descriptors[i].Entries[j].Key = strings.ToLower(opts.Descriptors[i].Entries[j].Key)
+			if opts.Descriptors[i].Entries[j].Value != "" {
+				opts.Descriptors[i].Entries[j].Value = strings.ToLower(opts.Descriptors[i].Entries[j].Value)
+			}
+		}
 	}
 }
 
@@ -91,8 +107,6 @@ type RateLimiterFilter struct {
 	options  FilterOptions
 	executor RateLimitExecutor // Strategy Interface to be resolved at boot
 }
-
-
 
 // NewRateLimiterFilter creates a new initialized rate limiter filter.
 func NewRateLimiterFilter(name string, opts FilterOptions, executor RateLimitExecutor) *RateLimiterFilter {
@@ -106,34 +120,47 @@ func NewRateLimiterFilter(name string, opts FilterOptions, executor RateLimitExe
 
 // Execute performs runtime header extraction, invokes the limit check, and applies headers/blocks.
 func (f *RateLimiterFilter) Execute(ctx *engine.RequestContext) error {
-	descriptors := make([]DescriptorEntry, 0, len(f.options.Descriptors))
+	// Pre-allocate slice capacity based on configured descriptors to minimize runtime slice grow allocations.
+	descriptors := make([]DescriptorEntry, 0, len(f.options.Descriptors)*2)
 
-	// Dynamically extract the client's runtime values
+	// Track already extracted keys using a stack-allocated map to prevent duplicate header lookups
+	// in the same request lifecycle when keys are shared across multiple composite descriptors.
+	extractedKeys := make(map[string]bool, len(f.options.Descriptors)*2)
+
+	// Dynamically extract the client's runtime values for all active keys defined in the policy
 	for _, desc := range f.options.Descriptors {
-		var val string
-
-		// Rule A (Explicit Mapping)
-		if headerName, ok := f.options.HeaderMappings[desc.Key]; ok {
-			val = ctx.GetHeader(headerName)
-		} else {
-			// Rule B (Implicit/Default Mapping)
-			val = ctx.GetHeader(desc.Key)
-		}
-
-		// Rule C (Default IP Fallbacks)
-		if val == "" && (desc.Key == "ip" || desc.Key == "client_ip" || desc.Key == "remote_ip") {
-			val = ctx.GetHeader("x-forwarded-for")
-			if val == "" {
-				val = ctx.GetHeader("x-real-ip")
+		for _, entry := range desc.Entries {
+			// Skip if this key has already been extracted from the request headers
+			if extractedKeys[entry.Key] {
+				continue
 			}
-		}
+			extractedKeys[entry.Key] = true
 
-		// Rule D (Absolute Fallback)
-		if val == "" {
-			val = "default"
-		}
+			var val string
 
-		descriptors = append(descriptors, DescriptorEntry{Key: desc.Key, Value: val})
+			// Rule A (Explicit Mapping)
+			if headerName, ok := f.options.HeaderMappings[entry.Key]; ok {
+				val = ctx.GetHeader(headerName)
+			} else {
+				// Rule B (Implicit/Default Mapping)
+				val = ctx.GetHeader(entry.Key)
+			}
+
+			// Rule C (Default IP Fallbacks)
+			if val == "" && (entry.Key == "ip" || entry.Key == "client_ip" || entry.Key == "remote_ip") {
+				val = ctx.GetHeader("x-forwarded-for")
+				if val == "" {
+					val = ctx.GetHeader("x-real-ip")
+				}
+			}
+
+			// Rule D (Absolute Fallback)
+			if val == "" {
+				val = "default"
+			}
+
+			descriptors = append(descriptors, DescriptorEntry{Key: entry.Key, Value: val})
+		}
 	}
 
 	// Extract dynamic cost
@@ -171,8 +198,7 @@ func (f *RateLimiterFilter) Execute(ctx *engine.RequestContext) error {
 			zap.String("filter", f.name),
 			zap.Error(err),
 		)
-		// Usually we let the request pass if the rate limiter fails open, but the prompt says:
-		// "Do not omit error handling or logging." We will return the error which might abort the chain.
+		// Return the error to abort the filter chain safely
 		return err
 	}
 
@@ -180,7 +206,7 @@ func (f *RateLimiterFilter) Execute(ctx *engine.RequestContext) error {
 	if f.options.ResponseHeaders.Enabled {
 		ctx.SetHeaderDownstream(f.options.ResponseHeaders.LimitHeader, fmt.Sprintf("%d", result.Limit))
 		ctx.SetHeaderDownstream(f.options.ResponseHeaders.RemainingHeader, fmt.Sprintf("%d", result.LimitRemaining))
-		
+
 		// Reset header usually represents epoch timestamp or seconds remaining.
 		// Using seconds remaining as a straightforward string representation.
 		resetSeconds := int64(math.Ceil(result.ResetDuration.Seconds()))

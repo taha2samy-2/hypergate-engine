@@ -3,3 +3,4 @@ tests/*
 .git
 pipfile
 pipfile.lock
+taskfile.yaml
