@@ -61,6 +61,12 @@ func (v *HyperChainValidator) validateFilters(ctx context.Context, chain *hyperv
 		case "DenyFilter":
 			obj := &hyperv1alpha1.DenyFilter{}
 			lookupErr = v.Client.Get(ctx, key, obj)
+		case "CorrelationIdFilter":
+			obj := &hyperv1alpha1.CorrelationIdFilter{}
+			lookupErr = v.Client.Get(ctx, key, obj)
+		case "RedisMetadataEnricherFilter":
+			obj := &hyperv1alpha1.RedisMetadataEnricherFilter{}
+			lookupErr = v.Client.Get(ctx, key, obj)
 		default:
 			return nil, fmt.Errorf("unknown filter kind '%s' in HyperChain '%s'", ref.Kind, chain.Name)
 		}

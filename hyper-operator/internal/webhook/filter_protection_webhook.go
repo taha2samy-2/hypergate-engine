@@ -25,6 +25,8 @@ var _ admission.Validator[*hyperv1alpha1.OidcFilter] = &FilterProtectionValidato
 var _ admission.Validator[*hyperv1alpha1.RateLimitFilter] = &FilterProtectionValidator[*hyperv1alpha1.RateLimitFilter]{Kind: "RateLimitFilter"}
 var _ admission.Validator[*hyperv1alpha1.HeaderModifierFilter] = &FilterProtectionValidator[*hyperv1alpha1.HeaderModifierFilter]{Kind: "HeaderModifierFilter"}
 var _ admission.Validator[*hyperv1alpha1.DenyFilter] = &FilterProtectionValidator[*hyperv1alpha1.DenyFilter]{Kind: "DenyFilter"}
+var _ admission.Validator[*hyperv1alpha1.CorrelationIdFilter] = &FilterProtectionValidator[*hyperv1alpha1.CorrelationIdFilter]{Kind: "CorrelationIdFilter"}
+var _ admission.Validator[*hyperv1alpha1.RedisMetadataEnricherFilter] = &FilterProtectionValidator[*hyperv1alpha1.RedisMetadataEnricherFilter]{Kind: "RedisMetadataEnricherFilter"}
 
 // ValidateCreate implements admission.Validator.
 func (v *FilterProtectionValidator[T]) ValidateCreate(ctx context.Context, obj T) (admission.Warnings, error) {
@@ -85,6 +87,20 @@ func SetupFiltersWebhookWithManager(mgr ctrl.Manager) error {
 	// Register validator for DenyFilter
 	if err := ctrl.NewWebhookManagedBy(mgr, &hyperv1alpha1.DenyFilter{}).
 		WithValidator(&FilterProtectionValidator[*hyperv1alpha1.DenyFilter]{Client: c, Kind: "DenyFilter"}).
+		Complete(); err != nil {
+		return err
+	}
+
+	// Register validator for CorrelationIdFilter
+	if err := ctrl.NewWebhookManagedBy(mgr, &hyperv1alpha1.CorrelationIdFilter{}).
+		WithValidator(&FilterProtectionValidator[*hyperv1alpha1.CorrelationIdFilter]{Client: c, Kind: "CorrelationIdFilter"}).
+		Complete(); err != nil {
+		return err
+	}
+
+	// Register validator for RedisMetadataEnricherFilter
+	if err := ctrl.NewWebhookManagedBy(mgr, &hyperv1alpha1.RedisMetadataEnricherFilter{}).
+		WithValidator(&FilterProtectionValidator[*hyperv1alpha1.RedisMetadataEnricherFilter]{Client: c, Kind: "RedisMetadataEnricherFilter"}).
 		Complete(); err != nil {
 		return err
 	}

@@ -37,6 +37,8 @@ type HyperChainMasterCompilerReconciler struct {
 // +kubebuilder:rbac:groups=hyper.io,resources=ratelimitfilters,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=hyper.io,resources=headermodifierfilters,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=hyper.io,resources=denyfilters,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=hyper.io,resources=correlationidfilters,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=hyper.io,resources=redismetadataenricherfilters,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile aggregated configurations and generate the final config.yaml
@@ -104,6 +106,18 @@ func (r *HyperChainMasterCompilerReconciler) Reconcile(ctx context.Context, req 
 		return ctrl.Result{}, err
 	}
 
+	var correlationIdList hyperv1alpha1.CorrelationIdFilterList
+	if err := r.List(ctx, &correlationIdList); err != nil {
+		reqLogger.Error(err, "unable to list CorrelationIdFilters")
+		return ctrl.Result{}, err
+	}
+
+	var redisMetadataEnricherList hyperv1alpha1.RedisMetadataEnricherFilterList
+	if err := r.List(ctx, &redisMetadataEnricherList); err != nil {
+		reqLogger.Error(err, "unable to list RedisMetadataEnricherFilters")
+		return ctrl.Result{}, err
+	}
+
 	// Sort routes by priority descending
 	routes := routeList.Items
 	sort.Slice(routes, func(i, j int) bool {
@@ -125,6 +139,7 @@ func (r *HyperChainMasterCompilerReconciler) Reconcile(ctx context.Context, req 
 		Chains: make(map[string]config.Chain),
 		Router: config.RouterConfig{
 			Routes: []config.RouteConfig{},
+			Other:  activeConfig.Spec.FallbackChain,
 		},
 	}
 
@@ -157,6 +172,16 @@ func (r *HyperChainMasterCompilerReconciler) Reconcile(ctx context.Context, req 
 	denyMap := make(map[string]*hyperv1alpha1.DenyFilter)
 	for i := range denyList.Items {
 		denyMap[denyList.Items[i].Name] = &denyList.Items[i]
+	}
+
+	correlationIdMap := make(map[string]*hyperv1alpha1.CorrelationIdFilter)
+	for i := range correlationIdList.Items {
+		correlationIdMap[correlationIdList.Items[i].Name] = &correlationIdList.Items[i]
+	}
+
+	redisMetadataEnricherMap := make(map[string]*hyperv1alpha1.RedisMetadataEnricherFilter)
+	for i := range redisMetadataEnricherList.Items {
+		redisMetadataEnricherMap[redisMetadataEnricherList.Items[i].Name] = &redisMetadataEnricherList.Items[i]
 	}
 
 	// Map HyperChain list and handle status bubbling
@@ -201,6 +226,24 @@ func (r *HyperChainMasterCompilerReconciler) Reconcile(ctx context.Context, req 
 			case "DenyFilter":
 				filterType = "deny"
 				f, exists := denyMap[filterRef.Name]
+				if !exists {
+					failed = true
+					failMsg = fmt.Sprintf("Filter %s of Kind %s not found", filterRef.Name, filterRef.Kind)
+					break
+				}
+				resolvedOptions = f.Spec
+			case "CorrelationIdFilter":
+				filterType = "correlation_id"
+				f, exists := correlationIdMap[filterRef.Name]
+				if !exists {
+					failed = true
+					failMsg = fmt.Sprintf("Filter %s of Kind %s not found", filterRef.Name, filterRef.Kind)
+					break
+				}
+				resolvedOptions = f.Spec
+			case "RedisMetadataEnricherFilter":
+				filterType = "redis_metadata_enricher"
+				f, exists := redisMetadataEnricherMap[filterRef.Name]
 				if !exists {
 					failed = true
 					failMsg = fmt.Sprintf("Filter %s of Kind %s not found", filterRef.Name, filterRef.Kind)
@@ -358,5 +401,7 @@ func (r *HyperChainMasterCompilerReconciler) SetupWithManager(mgr ctrl.Manager) 
 		Watches(&hyperv1alpha1.RateLimitFilter{}, triggerFunc).
 		Watches(&hyperv1alpha1.HeaderModifierFilter{}, triggerFunc).
 		Watches(&hyperv1alpha1.DenyFilter{}, triggerFunc).
+		Watches(&hyperv1alpha1.CorrelationIdFilter{}, triggerFunc).
+		Watches(&hyperv1alpha1.RedisMetadataEnricherFilter{}, triggerFunc).
 		Complete(r)
 }

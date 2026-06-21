@@ -88,36 +88,36 @@ tasks:
       - task: run-scenario
         vars: { NAME: "metadata_enrichment" }
 
-  go:tidy:
+  hyper-engine-makefile:tidy:
     desc: "Tidy and verify Go module dependencies"
     cmds:
       - go mod tidy
       - go mod verify
     silent: true
 
-  go:fmt:
+  hyper-engine-makefile:fmt:
     desc: "Format all Go source files according to style guidelines"
     cmds:
       - go fmt ./...
     silent: true
 
-  go:vet:
+  hyper-engine-makefile:vet:
     desc: "Run Go static analysis compiler checks (vet)"
     cmds:
       - go vet ./...
 
-  go:generate:
+  hyper-engine-makefile:generate:
     desc: "Generate Protobuf and gRPC files using Buf tool"
     cmds:
       - buf generate buf.build/envoyproxy/envoy --path envoy/service/auth/v3
 
-  go:build:
+  hyper-engine-makefile:build:
     desc: "Build highly-optimized, stripped Go binary for Linux"
     cmds:
       - mkdir -p bin
       - CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o bin/engine ./cmd/engine
 
-  go:clean:
+  hyper-engine-makefile:clean:
     desc: "Clean up built binaries and cached test results"
     cmds:
       - rm -rf bin/
