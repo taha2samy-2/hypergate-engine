@@ -52,7 +52,7 @@ spec:
                   default: "hyper-system"
                 engineImage:
                   type: string
-                  default: "taha/myprog-engine:latest"
+                  default: "ghcr.io/taha2samy-2/hyper-engine:1.0.0"
                 redisServiceRef:
                   type: string
                 fallbackChain:
