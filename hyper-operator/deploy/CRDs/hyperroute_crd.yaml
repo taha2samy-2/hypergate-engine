@@ -4,17 +4,36 @@ metadata:
   name: hyperroutes.hyper.io
 spec:
   group: hyper.io
+  names:
+    kind: HyperRoute
+    listKind: HyperRouteList
+    plural: hyperroutes
+    singular: hyperroute
+    shortNames:
+      - hrt
+  scope: Cluster
   versions:
     - name: v1alpha1
       served: true
       storage: true
+      subresources:
+        status: {}
       schema:
         openAPIV3Schema:
           type: object
           properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
             spec:
               type: object
-              required: ["priority", "targetPolicy", "matches"]
+              required:
+                - priority
+                - targetPolicy
+                - matches
               properties:
                 priority:
                   type: integer
@@ -33,12 +52,5 @@ spec:
                         type: object
                         additionalProperties:
                           type: string
-          subresources:
-            status: {}
-      scope: Cluster
-      names:
-        plural: hyperroutes
-        singular: hyperroute
-        kind: HyperRoute
-        shortNames:
-          - hrt
+            status:
+              type: object
