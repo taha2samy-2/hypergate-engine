@@ -147,17 +147,33 @@ func (r *HyperConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			},
 			Env: []corev1.EnvVar{
 				{
-					Name:  "CONFIG_MODE",
-					Value: "k8s",
+					Name:  "ENGINE_CONFIG_PATH",
+					Value: "/etc/hyper-engine/config.yaml",
 				},
+			},
+			VolumeMounts: []corev1.VolumeMount{
 				{
-					Name:  "CONFIG_MAP_NAME",
-					Value: "hyper-engine-config",
+					Name:      "config-volume",
+					MountPath: "/etc/hyper-engine",
+					ReadOnly:  true,
 				},
 			},
 		}
-		
+
 		ds.Spec.Template.Spec.Containers = []corev1.Container{container}
+		ds.Spec.Template.Spec.Volumes = []corev1.Volume{
+			{
+				Name: "config-volume",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: "hyper-engine-config",
+						},
+					},
+				},
+			},
+		}
+
 		return ctrl.SetControllerReference(&hyperConfig, ds, r.Scheme)
 	}); err != nil {
 		logger.Error(err, "failed to reconcile DaemonSet")

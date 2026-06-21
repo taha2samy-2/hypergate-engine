@@ -17,6 +17,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"strings"
+
 	hyperv1alpha1 "github.com/taha/myprog/hyper-operator/api/v1alpha1"
 	"github.com/taha/myprog/internal/config"
 	mylogger "github.com/taha/myprog/internal/logger"
@@ -126,6 +128,7 @@ func (r *HyperChainMasterCompilerReconciler) Reconcile(ctx context.Context, req 
 
 	// Mapping to Engine Structs
 	engineConfig := config.Config{
+		Version: "v1",
 		Server: config.ServerConfig{
 			Address:              activeConfig.Spec.ServerAddress,
 			MaxConcurrentStreams: activeConfig.Spec.MaxConcurrentStreams,
@@ -146,10 +149,11 @@ func (r *HyperChainMasterCompilerReconciler) Reconcile(ctx context.Context, req 
 	// Map HyperRedis list
 	for _, hr := range redisList.Items {
 		engineConfig.Redis[hr.Name] = config.RedisServiceConfig{
-			URL:      hr.Spec.Url,
-			Type:     string(hr.Spec.Type),
-			PoolSize: hr.Spec.PoolSize,
-			Timeout:  hr.Spec.Timeout,
+			URL:                   hr.Spec.Url,
+			Type:                  string(hr.Spec.Type),
+			PoolSize:              hr.Spec.PoolSize,
+			Timeout:               hr.Spec.Timeout,
+			ActiveConnHealthCheck: hr.Spec.ActiveConnHealthCheck,
 		}
 	}
 
@@ -315,7 +319,7 @@ func (r *HyperChainMasterCompilerReconciler) Reconcile(ctx context.Context, req 
 			if m.Headers != nil {
 				hmConfigs = make(map[string]config.HeaderMatchConfig)
 				for k, v := range m.Headers {
-					hmConfigs[k] = config.HeaderMatchConfig{Exact: v}
+					hmConfigs[strings.ToLower(k)] = config.HeaderMatchConfig{Exact: v}
 				}
 			}
 
@@ -326,6 +330,7 @@ func (r *HyperChainMasterCompilerReconciler) Reconcile(ctx context.Context, req 
 			})
 		}
 		engineConfig.Router.Routes = append(engineConfig.Router.Routes, config.RouteConfig{
+			Name:        hr.Name,
 			TargetChain: hr.Spec.TargetPolicy,
 			Matches:     matchConfigs,
 		})
