@@ -4,23 +4,44 @@ metadata:
   name: hyperredis.hyper.io
 spec:
   group: hyper.io
+  names:
+    kind: HyperRedis
+    listKind: HyperRedisList
+    plural: hyperredis
+    singular: hyperredis
+    shortNames:
+      - hr
+  scope: Cluster
   versions:
     - name: v1alpha1
       served: true
       storage: true
+      subresources:
+        status: {}
       schema:
         openAPIV3Schema:
           type: object
           properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
             spec:
               type: object
-              required: ["url", "type"]
+              required:
+                - url
+                - type
               properties:
                 url:
                   type: string
                 type:
                   type: string
-                  enum: ["SINGLE", "CLUSTER", "SENTINEL"]
+                  enum:
+                    - SINGLE
+                    - CLUSTER
+                    - SENTINEL
                 poolSize:
                   type: integer
                   minimum: 1
@@ -36,12 +57,3 @@ spec:
                 lastCheck:
                   type: string
                   format: date-time
-          subresources:
-            status: {}
-      scope: Cluster
-      names:
-        plural: hyperredis
-        singular: hyperredis
-        kind: HyperRedis
-        shortNames:
-          - hr
