@@ -4,17 +4,35 @@ metadata:
   name: hyperconfigs.hyper.io
 spec:
   group: hyper.io
+  names:
+    kind: HyperConfig
+    listKind: HyperConfigList
+    plural: hyperconfigs
+    singular: hyperconfig
+    shortNames:
+      - hc
+  scope: Cluster
   versions:
     - name: v1alpha1
       served: true
       storage: true
+      subresources:
+        status: {}
       schema:
         openAPIV3Schema:
           type: object
           properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
             spec:
               type: object
-              required: ["redisServiceRef"]
+              required:
+                - redisServiceRef
+                - fallbackChain
               properties:
                 serverAddress:
                   type: string
@@ -23,7 +41,11 @@ spec:
                   type: integer
                 logLevel:
                   type: string
-                  enum: ["DEBUG", "INFO", "WARN", "ERROR"]
+                  enum:
+                    - DEBUG
+                    - INFO
+                    - WARN
+                    - ERROR
                   default: "INFO"
                 targetNamespace:
                   type: string
@@ -33,12 +55,7 @@ spec:
                   default: "taha/myprog-engine:latest"
                 redisServiceRef:
                   type: string
-          subresources:
-            status: {}
-      scope: Cluster
-      names:
-        plural: hyperconfigs
-        singular: hyperconfig
-        kind: HyperConfig
-        shortNames:
-          - hc
+                fallbackChain:
+                  type: string
+            status:
+              type: object
