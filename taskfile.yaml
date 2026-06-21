@@ -157,9 +157,10 @@ tasks:
       - kubectl apply -f hyper-operator/deploy/CRDs/filter_ratelimit_crd.yaml
       - kubectl apply -f hyper-operator/deploy/CRDs/filter_redismetadataenricher_crd.yaml
       - kubectl apply -f hyper-operator/deploy/CRDs/hyperchain_crd.yaml
-      - kubectl apply -f hyper-operator/deploy/CRDs/hyperconfig_crd.yaml
       - kubectl apply -f hyper-operator/deploy/CRDs/hyperredis_crd.yaml
       - kubectl apply -f hyper-operator/deploy/CRDs/hyperroute_crd.yaml
+      - kubectl apply -f hyper-operator/deploy/CRDs/hyperconfig_crd.yaml
+
 
 
   operator:undeploy:
