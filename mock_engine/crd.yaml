@@ -1,0 +1,207 @@
+apiVersion: hyper.io/v1alpha1
+kind: HyperRedis
+metadata:
+  name: shared-redis
+spec:
+  url: "redis.hyper-system.svc:6379"
+  type: "SINGLE"
+  poolSize: 20
+  timeout: "5s"
+  activeConnHealthCheck: true
+---
+apiVersion: hyper.io/v1alpha1
+kind: HyperRedis
+metadata:
+  name: cache-redis
+spec:
+  url: "redis-cache.hyper-system.svc:6379"
+  type: "CLUSTER"
+  poolSize: 50
+  timeout: "2s"
+  activeConnHealthCheck: false
+---
+apiVersion: hyper.io/v1alpha1
+kind: CorrelationIdFilter
+metadata:
+  name: generate-trace-id
+spec:
+  headerName: "x-request-id"
+  algorithm: "uuidv4"
+  mode: "if_missing"
+  propagateToUpstream: true
+  propagateToDownstream: true
+---
+apiVersion: hyper.io/v1alpha1
+kind: OidcFilter
+metadata:
+  name: keycloak-idp
+spec:
+  providerName: "Keycloak-IDP"
+  issuerUrl: "https://auth.example.com/realms/master"
+  clientId: "gateway-client"
+  userIdClaim: "sub"
+  emailClaim: "email"
+  groupsClaim: "roles"
+  allowUnverifiedEmail: false
+  claimToHeaders:
+    - headerName: "x-user-id"
+      claimName: "sub"
+    - headerName: "x-user-email"
+      claimName: "email"
+---
+apiVersion: hyper.io/v1alpha1
+kind: RedisMetadataEnricherFilter
+metadata:
+  name: user-profile-enricher
+spec:
+  redisService: "cache-redis"
+  keyPattern: "profile:{user_id}"
+  cacheSizeMB: 20
+  cacheTimeout: "10m"
+  variables:
+    user_id:
+      source: "{header:x-user-id}"
+      default: "guest"
+  outputMappings:
+    - jsonPath: "membership_tier"
+      targetHeader: "x-user-tier"
+    - jsonPath: "status"
+      targetHeader: "x-user-status"
+---
+apiVersion: hyper.io/v1alpha1
+kind: HeaderModifierFilter
+metadata:
+  name: inject-internal-headers
+spec:
+  upstream:
+    add:
+      "x-gateway-processed": "true"
+    override:
+      "x-env-stage": "production"
+    remove:
+      - "authorization"
+      - "cookie"
+---
+apiVersion: hyper.io/v1alpha1
+kind: HeaderModifierFilter
+metadata:
+  name: strip-downstream-headers
+spec:
+  downstream:
+    remove:
+      - "server"
+      - "x-powered-by"
+---
+apiVersion: hyper.io/v1alpha1
+kind: RateLimitFilter
+metadata:
+  name: global-limit-policy
+spec:
+  domain: "api-gateway"
+  algorithm: "token_bucket"
+  redisService: "shared-redis"
+  responseHeaders:
+    enabled: true
+    limitHeader: "X-RateLimit-Limit"
+    remainingHeader: "X-RateLimit-Remaining"
+    resetHeader: "X-RateLimit-Reset"
+  headerMappings:
+    "role": "x-user-tier"
+  descriptors:
+    - entries:
+        - key: "role"
+          value: "vip"
+      maxTokens: 1000
+      fillRate: 100
+    - entries:
+        - key: "role"
+          value: "standard"
+      maxTokens: 100
+      fillRate: 10
+    - entries:
+        - key: "role"
+      maxTokens: 10
+      fillRate: 1
+---
+apiVersion: hyper.io/v1alpha1
+kind: DenyFilter
+metadata:
+  name: block-malicious-requests
+spec:
+  statusCode: 403
+  body: "Malicious request blocked by Gateway Security policy"
+  match:
+    headers:
+      "x-scanner-signature": "*"
+    notHeaders:
+      "x-trusted-origin": "secret-corp"
+---
+apiVersion: hyper.io/v1alpha1
+kind: HyperChain
+metadata:
+  name: chain-secure-auth
+spec:
+  filters:
+    - kind: "CorrelationIdFilter"
+      name: "generate-trace-id"
+    - kind: "OidcFilter"
+      name: "keycloak-idp"
+    - kind: "RedisMetadataEnricherFilter"
+      name: "user-profile-enricher"
+    - kind: "HeaderModifierFilter"
+      name: "inject-internal-headers"
+    - kind: "RateLimitFilter"
+      name: "global-limit-policy"
+---
+apiVersion: hyper.io/v1alpha1
+kind: HyperChain
+metadata:
+  name: chain-public-api
+spec:
+  filters:
+    - kind: "CorrelationIdFilter"
+      name: "generate-trace-id"
+    - kind: "HeaderModifierFilter"
+      name: "strip-downstream-headers"
+---
+apiVersion: hyper.io/v1alpha1
+kind: HyperChain
+metadata:
+  name: chain-fallback-deny
+spec:
+  filters:
+    - kind: "DenyFilter"
+      name: "block-malicious-requests"
+---
+apiVersion: hyper.io/v1alpha1
+kind: HyperRoute
+metadata:
+  name: admin-route
+spec:
+  priority: 200
+  targetPolicy: "chain-secure-auth"
+  matches:
+    - pathPrefix: "/api/admin"
+      headers:
+        "x-admin-token": "*"
+---
+apiVersion: hyper.io/v1alpha1
+kind: HyperRoute
+metadata:
+  name: user-route
+spec:
+  priority: 100
+  targetPolicy: "chain-secure-auth"
+  matches:
+    - pathPrefix: "/api/users"
+---
+apiVersion: hyper.io/v1alpha1
+kind: HyperRoute
+metadata:
+  name: public-route
+spec:
+  priority: 50
+  targetPolicy: "chain-public-api"
+  matches:
+    - pathPrefix: "/api/public"
+    - pathRegexPattern: "^/api/v[1-9]/public$"
