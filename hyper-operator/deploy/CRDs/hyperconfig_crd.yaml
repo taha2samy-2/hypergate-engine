@@ -32,7 +32,6 @@ spec:
               type: object
               required:
                 - redisServiceRef
-                - fallbackChain
               properties:
                 serverAddress:
                   type: string

@@ -42,8 +42,8 @@ type HyperConfigSpec struct {
 	RedisServiceRef string `json:"redisServiceRef"`
 
 	// FallbackChain is the name of the HyperChain to execute if no route matches.
-	// +kubebuilder:validation:Required
-	FallbackChain string `json:"fallbackChain"`
+	// +optional
+	FallbackChain string `json:"fallbackChain,omitempty"`
 }
 
 // +kubebuilder:object:generate=true
