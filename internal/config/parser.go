@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -10,6 +11,9 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 const (
@@ -29,7 +33,37 @@ func LoadConfig() (*Config, string, error) {
 	var err error
 	configPath := ""
 
-	if provider == "URL" {
+	if provider == "K8S" {
+		config, err := rest.InClusterConfig()
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to load in-cluster config: %w", err)
+		}
+		clientset, err := kubernetes.NewForConfig(config)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to create kubernetes client: %w", err)
+		}
+
+		cmName := os.Getenv("CONFIG_K8S_NAME")
+		if cmName == "" {
+			cmName = "hyper-engine-config"
+		}
+		namespace := os.Getenv("CONFIG_K8S_NAMESPACE")
+		if namespace == "" {
+			namespace = "hyper-system"
+		}
+
+		cm, err := clientset.CoreV1().ConfigMaps(namespace).Get(context.Background(), cmName, metav1.GetOptions{})
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to get configmap %s: %w", cmName, err)
+		}
+
+		yamlContent, ok := cm.Data["config.yaml"]
+		if !ok {
+			return nil, "", fmt.Errorf("config.yaml not found in configmap %s", cmName)
+		}
+		data = []byte(yamlContent)
+		configPath = cmName
+	} else if provider == "URL" {
 		configURL := os.Getenv(EnvConfigURL)
 		if configURL == "" {
 			return nil, "", fmt.Errorf("config provider set to URL but CONFIG_URL is empty")
