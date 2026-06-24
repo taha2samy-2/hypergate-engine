@@ -1,0 +1,29 @@
+apiVersion: hyper.io/v1alpha1
+kind: HeaderModifierFilter
+metadata:
+  name: special-modifier
+spec:
+  upstream:
+    add:
+      "x-engine-enrichment": "gold-tier-success"
+---
+apiVersion: hyper.io/v1alpha1
+kind: HyperChain
+metadata:
+  name: chain-special-modify
+spec:
+  filters:
+    - kind: "HeaderModifierFilter"
+      name: "special-modifier"
+---
+apiVersion: hyper.io/v1alpha1
+kind: HyperRoute
+metadata:
+  name: special-route
+spec:
+  priority: 500
+  targetPolicy: "chain-special-modify"
+  matches:
+    - pathPrefix: "/"
+      headers:
+        "x-test-route": "special"
