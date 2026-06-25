@@ -62,6 +62,14 @@ tasks:
       - task: tests:metadata-enrichment
         ignore_error: true
 
+
+
+
+  tests:test-api-key:
+    desc: "Run api key tests specifically"
+    cmds:
+      - task: run-scenario
+        vars: { NAME: "api_key" }
   tests:test-matching:
     desc: "Run matching/boolean logic tests specifically"
     cmds:
@@ -156,6 +164,7 @@ tasks:
       - kubectl apply -f hyper-operator/deploy/CRDs/filter_oidc_crd.yaml
       - kubectl apply -f hyper-operator/deploy/CRDs/filter_ratelimit_crd.yaml
       - kubectl apply -f hyper-operator/deploy/CRDs/filter_redismetadataenricher_crd.yaml
+      - kubectl apply -f hyper-operator/deploy/CRDs/filter_apikey_crd.yaml
       - kubectl apply -f hyper-operator/deploy/CRDs/hyperchain_crd.yaml
       - kubectl apply -f hyper-operator/deploy/CRDs/hyperredis_crd.yaml
       - kubectl apply -f hyper-operator/deploy/CRDs/hyperroute_crd.yaml

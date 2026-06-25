@@ -109,3 +109,18 @@ webhooks:
         resources: ["redismetadataenricherfilters"]
     admissionReviewVersions: ["v1"]
     sideEffects: None
+
+  - name: vapikeyf.kb.io
+    clientConfig:
+      service:
+        name: hyper-operator
+        namespace: hyper-system
+        path: /validate-hyper-io-v1alpha1-apikeyfilter
+    failurePolicy: Fail
+    rules:
+      - apiGroups: ["hyper.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["DELETE"]
+        resources: ["apikeyfilters"]
+    admissionReviewVersions: ["v1"]
+    sideEffects: None

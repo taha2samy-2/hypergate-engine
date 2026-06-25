@@ -27,6 +27,7 @@ var _ admission.Validator[*hyperv1alpha1.HeaderModifierFilter] = &FilterProtecti
 var _ admission.Validator[*hyperv1alpha1.DenyFilter] = &FilterProtectionValidator[*hyperv1alpha1.DenyFilter]{Kind: "DenyFilter"}
 var _ admission.Validator[*hyperv1alpha1.CorrelationIdFilter] = &FilterProtectionValidator[*hyperv1alpha1.CorrelationIdFilter]{Kind: "CorrelationIdFilter"}
 var _ admission.Validator[*hyperv1alpha1.RedisMetadataEnricherFilter] = &FilterProtectionValidator[*hyperv1alpha1.RedisMetadataEnricherFilter]{Kind: "RedisMetadataEnricherFilter"}
+var _ admission.Validator[*hyperv1alpha1.ApiKeyFilter] = &FilterProtectionValidator[*hyperv1alpha1.ApiKeyFilter]{Kind: "ApiKeyFilter"}
 
 // ValidateCreate implements admission.Validator.
 func (v *FilterProtectionValidator[T]) ValidateCreate(ctx context.Context, obj T) (admission.Warnings, error) {
@@ -101,6 +102,13 @@ func SetupFiltersWebhookWithManager(mgr ctrl.Manager) error {
 	// Register validator for RedisMetadataEnricherFilter
 	if err := ctrl.NewWebhookManagedBy(mgr, &hyperv1alpha1.RedisMetadataEnricherFilter{}).
 		WithValidator(&FilterProtectionValidator[*hyperv1alpha1.RedisMetadataEnricherFilter]{Client: c, Kind: "RedisMetadataEnricherFilter"}).
+		Complete(); err != nil {
+		return err
+	}
+
+	// Register validator for ApiKeyFilter
+	if err := ctrl.NewWebhookManagedBy(mgr, &hyperv1alpha1.ApiKeyFilter{}).
+		WithValidator(&FilterProtectionValidator[*hyperv1alpha1.ApiKeyFilter]{Client: c, Kind: "ApiKeyFilter"}).
 		Complete(); err != nil {
 		return err
 	}

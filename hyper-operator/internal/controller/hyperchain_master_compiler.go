@@ -41,6 +41,8 @@ type HyperChainMasterCompilerReconciler struct {
 // +kubebuilder:rbac:groups=hyper.io,resources=denyfilters,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=hyper.io,resources=correlationidfilters,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=hyper.io,resources=redismetadataenricherfilters,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=hyper.io,resources=apikeyfilters,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=hyper.io,resources=apikeyfilters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile aggregated configurations and generate the final config.yaml
@@ -120,6 +122,12 @@ func (r *HyperChainMasterCompilerReconciler) Reconcile(ctx context.Context, req 
 		return ctrl.Result{}, err
 	}
 
+	var apiKeyList hyperv1alpha1.ApiKeyFilterList
+	if err := r.List(ctx, &apiKeyList); err != nil {
+		reqLogger.Error(err, "unable to list ApiKeyFilters")
+		return ctrl.Result{}, err
+	}
+
 	// Sort routes by priority descending
 	routes := routeList.Items
 	sort.Slice(routes, func(i, j int) bool {
@@ -188,6 +196,11 @@ func (r *HyperChainMasterCompilerReconciler) Reconcile(ctx context.Context, req 
 		redisMetadataEnricherMap[redisMetadataEnricherList.Items[i].Name] = &redisMetadataEnricherList.Items[i]
 	}
 
+	apiKeyMap := make(map[string]*hyperv1alpha1.ApiKeyFilter)
+	for i := range apiKeyList.Items {
+		apiKeyMap[apiKeyList.Items[i].Name] = &apiKeyList.Items[i]
+	}
+
 	// Map HyperChain list and handle status bubbling
 	validChains := make(map[string]bool)
 	for _, chainObj := range chainList.Items {
@@ -248,6 +261,15 @@ func (r *HyperChainMasterCompilerReconciler) Reconcile(ctx context.Context, req 
 			case "RedisMetadataEnricherFilter":
 				filterType = "redis_metadata_enricher"
 				f, exists := redisMetadataEnricherMap[filterRef.Name]
+				if !exists {
+					failed = true
+					failMsg = fmt.Sprintf("Filter %s of Kind %s not found", filterRef.Name, filterRef.Kind)
+					break
+				}
+				resolvedOptions = f.Spec
+			case "ApiKeyFilter":
+				filterType = "api_key"
+				f, exists := apiKeyMap[filterRef.Name]
 				if !exists {
 					failed = true
 					failMsg = fmt.Sprintf("Filter %s of Kind %s not found", filterRef.Name, filterRef.Kind)
@@ -408,5 +430,6 @@ func (r *HyperChainMasterCompilerReconciler) SetupWithManager(mgr ctrl.Manager) 
 		Watches(&hyperv1alpha1.DenyFilter{}, triggerFunc).
 		Watches(&hyperv1alpha1.CorrelationIdFilter{}, triggerFunc).
 		Watches(&hyperv1alpha1.RedisMetadataEnricherFilter{}, triggerFunc).
+		Watches(&hyperv1alpha1.ApiKeyFilter{}, triggerFunc).
 		Complete(r)
 }
