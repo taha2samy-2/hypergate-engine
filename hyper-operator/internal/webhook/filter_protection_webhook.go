@@ -63,7 +63,7 @@ func (v *FilterProtectionValidator[T]) ValidateDelete(ctx context.Context, obj T
 // SetupFiltersWebhookWithManager registers the webhook for the four filter types
 func SetupFiltersWebhookWithManager(mgr ctrl.Manager) error {
 	c := mgr.GetClient()
-	
+
 	// Register validator for OidcFilter
 	if err := ctrl.NewWebhookManagedBy(mgr, &hyperv1alpha1.OidcFilter{}).
 		WithValidator(&FilterProtectionValidator[*hyperv1alpha1.OidcFilter]{Client: c, Kind: "OidcFilter"}).

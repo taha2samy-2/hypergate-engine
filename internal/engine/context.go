@@ -12,7 +12,7 @@ type Header struct {
 }
 
 type RequestContext struct {
-	Ctx                  context.Context // Propagated gRPC context
+	Ctx                  context.Context
 	Path                 string
 	Method               string
 	Headers              map[string]string

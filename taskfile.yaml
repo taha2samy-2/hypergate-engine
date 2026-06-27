@@ -45,22 +45,6 @@ tasks:
       - rm -f tests/config.yaml
     ignore_error: true
 
-  test-all:
-    desc: "Sequentially run all integration test scenarios"
-    cmds:
-      - task: run-scenario
-        vars: { NAME: "matching" }
-        ignore_error: true
-      - task: tests:test-ratelimit
-        ignore_error: true
-      - task: run-scenario
-        vars: { NAME: "modification" }
-        ignore_error: true
-      - task: run-scenario
-        vars: { NAME: "integrations" }
-        ignore_error: true
-      - task: tests:metadata-enrichment
-        ignore_error: true
 
 
 
@@ -70,11 +54,6 @@ tasks:
     cmds:
       - task: run-scenario
         vars: { NAME: "api_key" }
-  tests:test-matching:
-    desc: "Run matching/boolean logic tests specifically"
-    cmds:
-      - task: run-scenario
-        vars: { NAME: "matching" }
 
   tests:test-ratelimit:
     desc: "Run rate limiting tests"
@@ -88,11 +67,6 @@ tasks:
       - task: run-scenario
         vars: { NAME: "modification" }
 
-  tests:integrations:
-    desc: "Run integration tests"
-    cmds:
-      - task: run-scenario
-        vars: { NAME: "integrations" }
 
   tests:metadata-enrichment:
     desc: "Run metadata enrichment tests"

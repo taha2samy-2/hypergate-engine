@@ -79,8 +79,6 @@ func main() {
 		os.Exit(1)
 	}
 
-
-
 	if err = (&controller.HyperChainMasterCompilerReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),

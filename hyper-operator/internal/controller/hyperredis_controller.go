@@ -64,19 +64,19 @@ func (r *HyperRedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	redisClient, err := redis.NewClientConn(ctx, req.Name, mappedConfig)
-	
+
 	if err != nil {
 		logger.Error(err, "Connection/PING failed")
-		
+
 		hyperRedis.Status.State = hyperv1alpha1.RedisStateError
 		hyperRedis.Status.LastCheck = metav1.Now()
-		
+
 		if updateErr := r.Status().Update(ctx, &hyperRedis); updateErr != nil {
 			return ctrl.Result{}, updateErr
 		}
-		
+
 		r.Recorder.Event(&hyperRedis, "Warning", "ConnectionFailed", err.Error())
-		
+
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
@@ -84,13 +84,13 @@ func (r *HyperRedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	hyperRedis.Status.State = hyperv1alpha1.RedisStateConnected
 	hyperRedis.Status.LastCheck = metav1.Now()
-	
+
 	if updateErr := r.Status().Update(ctx, &hyperRedis); updateErr != nil {
 		return ctrl.Result{}, updateErr
 	}
-	
+
 	r.Recorder.Event(&hyperRedis, "Normal", "ConnectionEstablished", "Successfully pinged Redis")
-	
+
 	return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 }
 

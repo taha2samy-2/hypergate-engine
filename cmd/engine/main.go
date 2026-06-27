@@ -21,7 +21,6 @@ import (
 	"github.com/taha/myprog/internal/router"
 )
 
-// Global map to track active health checkers across hot-reloads
 type activeChecker struct {
 	checker *redis.HealthChecker
 	cancel  context.CancelFunc
@@ -30,10 +29,13 @@ type activeChecker struct {
 var activeHealthCheckers = make(map[string]activeChecker)
 
 func compileAndRegister(cfg *config.Config, registry *engine.ChainRegistry) error {
+	mylogger.Debug("Starting compileAndRegister execution")
 	newChains := make(map[string]engine.Chain)
 	for name, chainConfig := range cfg.Chains {
 		var compiledChain engine.Chain
+		mylogger.Debug("Compiling chain", zap.String("chain_name", name))
 		for _, filterCfg := range chainConfig {
+			mylogger.Debug("Creating filter", zap.String("type", filterCfg.Type))
 			filter, err := filters.CreateFilter(filterCfg.Type, filterCfg.Options)
 			if err != nil {
 				mylogger.Error("Failed to compile filter", zap.String("chain", name), zap.Error(err))
@@ -45,11 +47,14 @@ func compileAndRegister(cfg *config.Config, registry *engine.ChainRegistry) erro
 		mylogger.Info("Compiled filter chain", zap.String("chain_name", name), zap.Int("filters_count", len(compiledChain)))
 	}
 	registry.ReplaceAll(newChains)
+	mylogger.Debug("Chains replaced in registry successfully")
 	return nil
 }
 
 func startHealthCheckForService(parentCtx context.Context, name string, client redis.Client) {
+	mylogger.Debug("startHealthCheckForService triggered", zap.String("service", name))
 	if existing, ok := activeHealthCheckers[name]; ok {
+		mylogger.Debug("Canceling existing health checker", zap.String("service", name))
 		existing.cancel()
 	}
 
@@ -60,11 +65,13 @@ func startHealthCheckForService(parentCtx context.Context, name string, client r
 		checker: hc,
 		cancel:  cancel,
 	}
+	mylogger.Debug("New health checker registered successfully", zap.String("service", name))
 }
 
-// startRedisServices initializes the Redis manager and boots the background health-check loops.
 func startRedisServices(ctx context.Context, cfg *config.Config) error {
+	mylogger.Debug("startRedisServices triggered")
 	if len(cfg.Redis) == 0 {
+		mylogger.Debug("No Redis services defined in configuration")
 		return nil
 	}
 
@@ -74,13 +81,11 @@ func startRedisServices(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("failed to initialize Redis manager: %w", err)
 	}
 
-	// Bootstrap active connection health checks for services that have it enabled
 	for name, svcCfg := range cfg.Redis {
 		if svcCfg.ActiveConnHealthCheck {
 			client, ok := redis.GlobalManager.GetClient(name)
 			if ok {
 				mylogger.Info("Starting background active connection health check...", zap.String("service", name))
-				// Register and spawn the background PING loop
 				startHealthCheckForService(ctx, name, client)
 			}
 		}
@@ -90,7 +95,6 @@ func startRedisServices(ctx context.Context, cfg *config.Config) error {
 }
 
 func main() {
-	// Create a global cancelable context to control background goroutines
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -109,36 +113,40 @@ func main() {
 	defer mylogger.Sync()
 
 	mylogger.Info("Configuration loaded successfully", zap.String("version", initialConfig.Version))
+	mylogger.Debug("Application configuration fully stored in atomic pointer")
 
-	// Initialize the Redis Manager and Health Checkers at boot
 	if err := startRedisServices(ctx, initialConfig); err != nil {
 		mylogger.Fatal("Failed to bootstrap Redis services on boot", zap.Error(err))
 	}
 
+	mylogger.Debug("Initializing core components")
 	registry := engine.NewChainRegistry()
 	executor := engine.NewChainExecutor()
 	pool := memory.NewContextPool()
 	routerInst := router.NewEngineRouter()
 
+	mylogger.Debug("Core components successfully initialized")
+
 	if err := compileAndRegister(initialConfig, registry); err != nil {
 		mylogger.Fatal("Failed to compile chains on boot", zap.Error(err))
 	}
 
-	// Dynamic Hot-Reloading using fsnotify
+	mylogger.Debug("Starting config hot-reloader goroutine")
 	go config.WatchConfig(configPath, func(newConfig *config.Config) {
 		mylogger.Info("Hot-reloading system connections and filter chains...")
 
 		if len(newConfig.Redis) > 0 {
 			if redis.GlobalManager == nil {
-				// Handle cold-start transitioning from zero-Redis to multi-Redis dynamically
+				mylogger.Debug("Redis manager is nil, performing cold start initialization")
 				if err := startRedisServices(ctx, newConfig); err != nil {
 					mylogger.Error("Failed to dynamically bootstrap Redis manager on hot-reload", zap.Error(err))
 				}
 			} else {
-				// Thread-safe atomic pointer swap of connection pools
+				mylogger.Debug("Redis manager exists, invoking graceful reload")
 				if err := redis.GlobalManager.Reload(newConfig); err != nil {
 					mylogger.Error("Failed to gracefully reload Redis connection pools", zap.Error(err))
 				} else {
+					mylogger.Debug("Redis connection pools successfully swapped")
 					for name, svcCfg := range newConfig.Redis {
 						client, ok := redis.GlobalManager.GetClient(name)
 						if ok && svcCfg.ActiveConnHealthCheck {
@@ -158,12 +166,13 @@ func main() {
 					}
 				}
 			}
-
 		}
 
+		mylogger.Debug("Re-compiling filter chains dynamically")
 		_ = compileAndRegister(newConfig, registry)
 	})
 
+	mylogger.Debug("Initializing gRPC Server wrapper")
 	grpcServer := mygrpc.NewGRPCServer(pool, routerInst, registry, executor)
 
 	address := initialConfig.Server.Address
@@ -171,14 +180,16 @@ func main() {
 		address = ":9001"
 	}
 
+	mylogger.Debug("Binding network TCP listener", zap.String("address", address))
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		mylogger.Fatal("Failed to bind network listener", zap.String("address", address), zap.Error(err))
 	}
 
-	mylogger.Info("Starting high-performance gRPC Server", zap.String("address", address))
+	mylogger.Info("Starting high-performance ext_proc gRPC Server", zap.String("address", address))
 
 	go func() {
+		mylogger.Debug("gRPC Server Serve goroutine spawned")
 		if err := grpcServer.Serve(listener); err != nil {
 			mylogger.Fatal("gRPC server encountered a fatal error", zap.Error(err))
 		}
@@ -187,18 +198,19 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
+	mylogger.Debug("Server is fully active, waiting for shutdown signals")
 	sig := <-stop
 
 	mylogger.Info("OS signal caught, initiating graceful shutdown...", zap.String("signal", sig.String()))
 
-	// Cancel the context first to notify background health checks and timers to exit cleanly
+	mylogger.Debug("Canceling global background context")
 	cancel()
 
-	// Shutdown the gRPC server gracefully
+	mylogger.Debug("Stopping gRPC server gracefully")
 	grpcServer.GracefulStop()
 
-	// Safely close any remaining open Redis connections
 	if redis.GlobalManager != nil {
+		mylogger.Debug("Closing Redis connection pools")
 		redis.GlobalManager.Close()
 	}
 

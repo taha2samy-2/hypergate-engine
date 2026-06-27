@@ -30,6 +30,7 @@ type Config struct {
 type RouterConfig struct {
 	Routes       []RouteConfig `yaml:"routes"`
 	DefaultChain string        `yaml:"default_chain"`
+	Other        string        `yaml:"other"`
 }
 
 // TelemetryConfig defines observability settings like logging.
@@ -453,17 +454,17 @@ type APIKeyOutputMapping struct {
 
 // APIKeyFilterConfig holds the configuration for the "api_key" filter.
 type APIKeyFilterConfig struct {
-	KeyNames         []string             `yaml:"key_names"`
-	KeyInHeader      bool                 `yaml:"key_in_header"`
-	KeyInQuery       bool                 `yaml:"key_in_query"`
-	HideCredentials  bool                 `yaml:"hide_credentials"`
-	RedisService     string               `yaml:"redis_service"`
-	RedisKeyPrefix   string               `yaml:"redis_key_prefix"`
-	HashAlgorithm    string               `yaml:"hash_algorithm"`
-	ValueFormat      string               `yaml:"value_format"` // "plain", "hash", or "json"
-	Delimiter        string               `yaml:"delimiter,omitempty"`
-	StatusCheck      APIKeyStatusCheck    `yaml:"status_check,omitempty"`
-	OutputMappings   []APIKeyOutputMapping `yaml:"output_mappings,omitempty"`
+	KeyNames        []string              `yaml:"key_names"`
+	KeyInHeader     bool                  `yaml:"key_in_header"`
+	KeyInQuery      bool                  `yaml:"key_in_query"`
+	HideCredentials bool                  `yaml:"hide_credentials"`
+	RedisService    string                `yaml:"redis_service"`
+	RedisKeyPrefix  string                `yaml:"redis_key_prefix"`
+	HashAlgorithm   string                `yaml:"hash_algorithm"`
+	ValueFormat     string                `yaml:"value_format"` // "plain", "hash", or "json"
+	Delimiter       string                `yaml:"delimiter,omitempty"`
+	StatusCheck     APIKeyStatusCheck     `yaml:"status_check,omitempty"`
+	OutputMappings  []APIKeyOutputMapping `yaml:"output_mappings,omitempty"`
 }
 
 // ApplyDefaults validates and defaults the config fields.
@@ -503,4 +504,3 @@ func (cfg *APIKeyFilterConfig) ApplyDefaults() error {
 
 	return nil
 }
-
