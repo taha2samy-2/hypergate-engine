@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/keepalive"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	extprocfilterv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 
@@ -83,6 +84,8 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 		s.pool.Release(reqCtx)
 	}()
 
+	var targetChainName string
+
 	for {
 		req, err := stream.Recv()
 		if err == io.EOF {
@@ -123,7 +126,7 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 				zap.String("method", reqCtx.Method),
 			)
 
-			targetChainName := s.router.Route(reqCtx)
+			targetChainName = s.router.Route(reqCtx)
 			if targetChainName != "" {
 				chain, exists := s.registry.Get(targetChainName)
 				if !exists {
@@ -167,9 +170,74 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 						},
 					},
 				},
+				ModeOverride: s.buildModeOverride(reqCtx),
 			}
 			if err := stream.Send(resp); err != nil {
 				mylogger.Error("Failed to send RequestHeaders response", zap.Error(err))
+				return err
+			}
+
+		case *extprocv3.ProcessingRequest_RequestBody:
+			mylogger.Debug("Received RequestBody phase")
+			reqCtx.RequestBody = msg.RequestBody.Body
+
+			if targetChainName != "" {
+				chain, exists := s.registry.Get(targetChainName)
+				if exists {
+					if err := s.executor.Execute(reqCtx, chain); err != nil {
+						mylogger.Error("Error executing chain on body", zap.Error(err))
+					}
+				}
+			}
+
+			resp := &extprocv3.ProcessingResponse{
+				Response: &extprocv3.ProcessingResponse_RequestBody{
+					RequestBody: &extprocv3.BodyResponse{
+						Response: &extprocv3.CommonResponse{
+							BodyMutation: s.buildBodyMutation(reqCtx.RequestBody, reqCtx.RequestBodyModified),
+						},
+					},
+				},
+			}
+			if err := stream.Send(resp); err != nil {
+				mylogger.Error("Failed to send RequestBody response", zap.Error(err))
+				return err
+			}
+
+		case *extprocv3.ProcessingRequest_RequestTrailers:
+			mylogger.Debug("Received RequestTrailers phase")
+			trailers := msg.RequestTrailers.Trailers
+			if trailers != nil {
+				for _, h := range trailers.Headers {
+					key := h.Key
+					var val string
+					if len(h.RawValue) > 0 {
+						val = string(h.RawValue)
+					} else {
+						val = h.Value
+					}
+					reqCtx.Headers[key] = val
+				}
+			}
+
+			if targetChainName != "" {
+				chain, exists := s.registry.Get(targetChainName)
+				if exists {
+					if err := s.executor.Execute(reqCtx, chain); err != nil {
+						mylogger.Error("Error executing chain on request trailers", zap.Error(err))
+					}
+				}
+			}
+
+			resp := &extprocv3.ProcessingResponse{
+				Response: &extprocv3.ProcessingResponse_RequestTrailers{
+					RequestTrailers: &extprocv3.TrailersResponse{
+						HeaderMutation: s.buildHeaderMutation(reqCtx.RequestTrailersToAdd, reqCtx.RequestTrailersToRemove),
+					},
+				},
+			}
+			if err := stream.Send(resp); err != nil {
+				mylogger.Error("Failed to send RequestTrailers response", zap.Error(err))
 				return err
 			}
 
@@ -197,9 +265,74 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 						},
 					},
 				},
+				ModeOverride: s.buildModeOverride(reqCtx),
 			}
 			if err := stream.Send(resp); err != nil {
 				mylogger.Error("Failed to send ResponseHeaders response", zap.Error(err))
+				return err
+			}
+
+		case *extprocv3.ProcessingRequest_ResponseBody:
+			mylogger.Debug("Received ResponseBody phase")
+			reqCtx.ResponseBodyBytes = msg.ResponseBody.Body
+
+			if targetChainName != "" {
+				chain, exists := s.registry.Get(targetChainName)
+				if exists {
+					if err := s.executor.Execute(reqCtx, chain); err != nil {
+						mylogger.Error("Error executing chain on response body", zap.Error(err))
+					}
+				}
+			}
+
+			resp := &extprocv3.ProcessingResponse{
+				Response: &extprocv3.ProcessingResponse_ResponseBody{
+					ResponseBody: &extprocv3.BodyResponse{
+						Response: &extprocv3.CommonResponse{
+							BodyMutation: s.buildBodyMutation(reqCtx.ResponseBodyBytes, reqCtx.ResponseBodyModified),
+						},
+					},
+				},
+			}
+			if err := stream.Send(resp); err != nil {
+				mylogger.Error("Failed to send ResponseBody response", zap.Error(err))
+				return err
+			}
+
+		case *extprocv3.ProcessingRequest_ResponseTrailers:
+			mylogger.Debug("Received ResponseTrailers phase")
+			trailers := msg.ResponseTrailers.Trailers
+			if trailers != nil {
+				for _, h := range trailers.Headers {
+					key := h.Key
+					var val string
+					if len(h.RawValue) > 0 {
+						val = string(h.RawValue)
+					} else {
+						val = h.Value
+					}
+					reqCtx.Headers[key] = val
+				}
+			}
+
+			if targetChainName != "" {
+				chain, exists := s.registry.Get(targetChainName)
+				if exists {
+					if err := s.executor.Execute(reqCtx, chain); err != nil {
+						mylogger.Error("Error executing chain on response trailers", zap.Error(err))
+					}
+				}
+			}
+
+			resp := &extprocv3.ProcessingResponse{
+				Response: &extprocv3.ProcessingResponse_ResponseTrailers{
+					ResponseTrailers: &extprocv3.TrailersResponse{
+						HeaderMutation: s.buildHeaderMutation(reqCtx.ResponseTrailersToAdd, reqCtx.ResponseTrailersToRemove),
+					},
+				},
+			}
+			if err := stream.Send(resp); err != nil {
+				mylogger.Error("Failed to send ResponseTrailers response", zap.Error(err))
 				return err
 			}
 		}
@@ -221,4 +354,59 @@ func (s *Server) buildHeaderMutation(headers []engine.Header, removes []string) 
 		SetHeaders:    setHeaders,
 		RemoveHeaders: removes,
 	}
+}
+
+func (s *Server) buildBodyMutation(body []byte, modified bool) *extprocv3.BodyMutation {
+	if !modified {
+		return nil
+	}
+	if len(body) == 0 {
+		return &extprocv3.BodyMutation{
+			Mutation: &extprocv3.BodyMutation_ClearBody{
+				ClearBody: true,
+			},
+		}
+	}
+	return &extprocv3.BodyMutation{
+		Mutation: &extprocv3.BodyMutation_Body{
+			Body: body,
+		},
+	}
+}
+
+func (s *Server) buildModeOverride(reqCtx *engine.RequestContext) *extprocfilterv3.ProcessingMode {
+	if !reqCtx.RequestBodyRequired && !reqCtx.ResponseBodyRequired && !reqCtx.RequestTrailersRequired && !reqCtx.ResponseTrailersRequired {
+		return nil
+	}
+
+	mode := &extprocfilterv3.ProcessingMode{
+		RequestHeaderMode:  extprocfilterv3.ProcessingMode_SEND,
+		ResponseHeaderMode: extprocfilterv3.ProcessingMode_SEND,
+	}
+
+	if reqCtx.RequestBodyRequired {
+		mode.RequestBodyMode = extprocfilterv3.ProcessingMode_BUFFERED
+	} else {
+		mode.RequestBodyMode = extprocfilterv3.ProcessingMode_NONE
+	}
+
+	if reqCtx.ResponseBodyRequired {
+		mode.ResponseBodyMode = extprocfilterv3.ProcessingMode_BUFFERED
+	} else {
+		mode.ResponseBodyMode = extprocfilterv3.ProcessingMode_NONE
+	}
+
+	if reqCtx.RequestTrailersRequired {
+		mode.RequestTrailerMode = extprocfilterv3.ProcessingMode_SEND
+	} else {
+		mode.RequestTrailerMode = extprocfilterv3.ProcessingMode_SKIP
+	}
+
+	if reqCtx.ResponseTrailersRequired {
+		mode.ResponseTrailerMode = extprocfilterv3.ProcessingMode_SEND
+	} else {
+		mode.ResponseTrailerMode = extprocfilterv3.ProcessingMode_SKIP
+	}
+
+	return mode
 }
