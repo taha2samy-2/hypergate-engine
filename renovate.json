@@ -13,7 +13,5 @@
       ]
     }
   ],
-  "dependencyDashboard": false,
-  "onboarding": false,
-  "requireConfig": "optional"
+  "dependencyDashboard": false
 }
