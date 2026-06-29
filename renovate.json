@@ -3,10 +3,6 @@
   "extends": [
     "config:recommended"
   ],
-  "customManagers": [
-    {
-      "customType": "regex",
-      "fileMatch": ["(^|/)values\\.yaml$"]
-    }
-  ]
+  "onboarding": false,
+  "requireConfig": "optional"
 }
