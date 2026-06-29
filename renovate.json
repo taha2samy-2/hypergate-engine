@@ -3,6 +3,9 @@
   "extends": [
     "config:recommended"
   ],
-  "onboarding": false,
-  "requireConfig": "optional"
+  "enabledManagers": ["helm-values"],
+  "helm-values": {
+    "fileMatch": ["(^|/)values\\.yaml$"] 
+  },
+  "dependencyDashboardApproval": true
 }
