@@ -1,16 +1,16 @@
 package grpc
 
 import (
-	"context"
+	"io"
 	"time"
 
 	"go.uber.org/zap"
-	rpcstatus "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	extprocfilterv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
+	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 
 	"github.com/taha/myprog/internal/config"
@@ -18,7 +18,6 @@ import (
 	mylogger "github.com/taha/myprog/internal/logger"
 	"github.com/taha/myprog/internal/memory"
 	"github.com/taha/myprog/internal/router"
-	authv3 "github.com/taha/myprog/pkg/api/envoy/service/auth/v3"
 )
 
 type Server struct {
@@ -26,7 +25,7 @@ type Server struct {
 	router   *router.EngineRouter
 	registry *engine.ChainRegistry
 	executor *engine.ChainExecutor
-	authv3.UnimplementedAuthorizationServer
+	extprocv3.UnimplementedExternalProcessorServer
 }
 
 func NewGRPCServer(
@@ -69,123 +68,345 @@ func NewGRPCServer(
 		executor: executor,
 	}
 
-	authv3.RegisterAuthorizationServer(grpcServer, authServer)
+	extprocv3.RegisterExternalProcessorServer(grpcServer, authServer)
 
 	return grpcServer
 }
 
-func (s *Server) Check(ctx context.Context, req *authv3.CheckRequest) (*authv3.CheckResponse, error) {
+func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error {
+	mylogger.Debug("ext_proc bidirectional stream opened")
 	startTime := time.Now()
 
 	reqCtx := s.pool.Acquire()
-	reqCtx.Ctx = ctx // Bind the dynamic gRPC request context
-	defer s.pool.Release(reqCtx)
+	reqCtx.Ctx = stream.Context()
+	defer func() {
+		mylogger.Debug("ext_proc stream closing, releasing context", zap.Duration("duration", time.Since(startTime)))
+		s.pool.Release(reqCtx)
+	}()
 
-	if req.Attributes != nil && req.Attributes.Request != nil && req.Attributes.Request.Http != nil {
-		httpReq := req.Attributes.Request.Http
-		reqCtx.Path = httpReq.Path
-		reqCtx.Method = httpReq.Method
+	var targetChainName string
 
-		mylogger.Debug("gRPC check request received",
-			zap.String("path", reqCtx.Path),
-			zap.String("method", reqCtx.Method),
-		)
-
-		for k, v := range httpReq.Headers {
-			reqCtx.Headers[k] = v
+	for {
+		req, err := stream.Recv()
+		if err == io.EOF {
+			mylogger.Debug("ext_proc stream closed by Envoy (EOF)")
+			return nil
 		}
-	}
-
-	targetChainName := s.router.Route(reqCtx)
-
-	chain, exists := s.registry.Get(targetChainName)
-	if !exists {
-		mylogger.Warn("Target chain not found in registry", zap.String("chain", targetChainName))
-	} else {
-		err := s.executor.Execute(reqCtx, chain)
 		if err != nil {
-			mylogger.Error("Error executing chain", zap.String("chain", targetChainName), zap.Error(err))
-		}
-	}
-
-	latency := time.Since(startTime)
-
-	if reqCtx.Blocked {
-		mylogger.Info("gRPC check request denied",
-			zap.String("path", reqCtx.Path),
-			zap.String("method", reqCtx.Method),
-			zap.Duration("latency", latency),
-			zap.Int32("status_code", int32(reqCtx.ResponseStatus)),
-			zap.String("decision", "DENY"),
-		)
-
-		deniedResponse := &authv3.DeniedHttpResponse{
-			Status: &typev3.HttpStatus{
-				Code: typev3.StatusCode(reqCtx.ResponseStatus),
-			},
-			Body: reqCtx.ResponseBody,
-		}
-
-		for _, h := range reqCtx.ResponseHeadersToAdd {
-			opt := &corev3.HeaderValueOption{
-				Header: &corev3.HeaderValue{
-					Key:   h.Key,
-					Value: h.Value,
-				},
-				AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+			if stream.Context().Err() != nil {
+				mylogger.Debug("ext_proc stream context canceled gracefully")
+				return nil
 			}
-			deniedResponse.Headers = append(deniedResponse.Headers, opt)
+			mylogger.Error("ext_proc stream receive error", zap.Error(err))
+			return err
 		}
 
-		return &authv3.CheckResponse{
-			Status: &rpcstatus.Status{
-				Code: int32(codes.PermissionDenied),
-			},
-			HttpResponse: &authv3.CheckResponse_DeniedResponse{
-				DeniedResponse: deniedResponse,
-			},
-		}, nil
+		switch msg := req.Request.(type) {
+		case *extprocv3.ProcessingRequest_RequestHeaders:
+			mylogger.Debug("Received RequestHeaders phase")
+			headers := msg.RequestHeaders.Headers
+			if headers != nil {
+				for _, h := range headers.Headers {
+					key := h.Key
+					var val string
+					if len(h.RawValue) > 0 {
+						val = string(h.RawValue)
+					} else {
+						val = h.Value
+					}
+					reqCtx.Headers[key] = val
+				}
+			}
+
+			reqCtx.Path = reqCtx.Headers[":path"]
+			reqCtx.Method = reqCtx.Headers[":method"]
+
+			mylogger.Debug("Parsed RequestHeaders attributes",
+				zap.String("path", reqCtx.Path),
+				zap.String("method", reqCtx.Method),
+			)
+
+			targetChainName = s.router.Route(reqCtx)
+			if targetChainName != "" {
+				chain, exists := s.registry.Get(targetChainName)
+				if !exists {
+					mylogger.Warn("Target chain not found in registry", zap.String("chain", targetChainName))
+				} else {
+					if err := s.executor.Execute(reqCtx, chain); err != nil {
+						mylogger.Error("Error executing chain", zap.String("chain", targetChainName), zap.Error(err))
+					}
+				}
+			}
+
+			if reqCtx.Blocked {
+				mylogger.Info("Request blocked by filter chain, sending ImmediateResponse",
+					zap.String("path", reqCtx.Path),
+					zap.Int32("status_code", reqCtx.ResponseStatus),
+				)
+
+				resp := &extprocv3.ProcessingResponse{
+					Response: &extprocv3.ProcessingResponse_ImmediateResponse{
+						ImmediateResponse: &extprocv3.ImmediateResponse{
+							Status: &typev3.HttpStatus{
+								Code: typev3.StatusCode(reqCtx.ResponseStatus),
+							},
+							Headers: s.buildHeaderMutation(reqCtx.ResponseHeadersToAdd, nil),
+							Body:    []byte(reqCtx.ResponseBody),
+						},
+					},
+				}
+				if err := stream.Send(resp); err != nil {
+					mylogger.Error("Failed to send ImmediateResponse", zap.Error(err))
+					return err
+				}
+				return nil
+			}
+
+			resp := &extprocv3.ProcessingResponse{
+				Response: &extprocv3.ProcessingResponse_RequestHeaders{
+					RequestHeaders: &extprocv3.HeadersResponse{
+						Response: &extprocv3.CommonResponse{
+							HeaderMutation: s.buildHeaderMutation(reqCtx.HeadersToAdd, reqCtx.HeadersToRemove),
+						},
+					},
+				},
+				ModeOverride: s.buildModeOverride(reqCtx),
+			}
+			if err := stream.Send(resp); err != nil {
+				mylogger.Error("Failed to send RequestHeaders response", zap.Error(err))
+				return err
+			}
+
+		case *extprocv3.ProcessingRequest_RequestBody:
+			mylogger.Debug("Received RequestBody phase")
+			reqCtx.RequestBody = msg.RequestBody.Body
+
+			if targetChainName != "" {
+				chain, exists := s.registry.Get(targetChainName)
+				if exists {
+					if err := s.executor.Execute(reqCtx, chain); err != nil {
+						mylogger.Error("Error executing chain on body", zap.Error(err))
+					}
+				}
+			}
+
+			resp := &extprocv3.ProcessingResponse{
+				Response: &extprocv3.ProcessingResponse_RequestBody{
+					RequestBody: &extprocv3.BodyResponse{
+						Response: &extprocv3.CommonResponse{
+							BodyMutation: s.buildBodyMutation(reqCtx.RequestBody, reqCtx.RequestBodyModified),
+						},
+					},
+				},
+			}
+			if err := stream.Send(resp); err != nil {
+				mylogger.Error("Failed to send RequestBody response", zap.Error(err))
+				return err
+			}
+
+		case *extprocv3.ProcessingRequest_RequestTrailers:
+			mylogger.Debug("Received RequestTrailers phase")
+			trailers := msg.RequestTrailers.Trailers
+			if trailers != nil {
+				for _, h := range trailers.Headers {
+					key := h.Key
+					var val string
+					if len(h.RawValue) > 0 {
+						val = string(h.RawValue)
+					} else {
+						val = h.Value
+					}
+					reqCtx.Headers[key] = val
+				}
+			}
+
+			if targetChainName != "" {
+				chain, exists := s.registry.Get(targetChainName)
+				if exists {
+					if err := s.executor.Execute(reqCtx, chain); err != nil {
+						mylogger.Error("Error executing chain on request trailers", zap.Error(err))
+					}
+				}
+			}
+
+			resp := &extprocv3.ProcessingResponse{
+				Response: &extprocv3.ProcessingResponse_RequestTrailers{
+					RequestTrailers: &extprocv3.TrailersResponse{
+						HeaderMutation: s.buildHeaderMutation(reqCtx.RequestTrailersToAdd, reqCtx.RequestTrailersToRemove),
+					},
+				},
+			}
+			if err := stream.Send(resp); err != nil {
+				mylogger.Error("Failed to send RequestTrailers response", zap.Error(err))
+				return err
+			}
+
+		case *extprocv3.ProcessingRequest_ResponseHeaders:
+			mylogger.Debug("Received ResponseHeaders phase")
+			headers := msg.ResponseHeaders.Headers
+			if headers != nil {
+				for _, h := range headers.Headers {
+					key := h.Key
+					var val string
+					if len(h.RawValue) > 0 {
+						val = string(h.RawValue)
+					} else {
+						val = h.Value
+					}
+					reqCtx.Headers[key] = val
+				}
+			}
+
+			resp := &extprocv3.ProcessingResponse{
+				Response: &extprocv3.ProcessingResponse_ResponseHeaders{
+					ResponseHeaders: &extprocv3.HeadersResponse{
+						Response: &extprocv3.CommonResponse{
+							HeaderMutation: s.buildHeaderMutation(reqCtx.ResponseHeadersToAdd, nil),
+						},
+					},
+				},
+				ModeOverride: s.buildModeOverride(reqCtx),
+			}
+			if err := stream.Send(resp); err != nil {
+				mylogger.Error("Failed to send ResponseHeaders response", zap.Error(err))
+				return err
+			}
+
+		case *extprocv3.ProcessingRequest_ResponseBody:
+			mylogger.Debug("Received ResponseBody phase")
+			reqCtx.ResponseBodyBytes = msg.ResponseBody.Body
+
+			if targetChainName != "" {
+				chain, exists := s.registry.Get(targetChainName)
+				if exists {
+					if err := s.executor.Execute(reqCtx, chain); err != nil {
+						mylogger.Error("Error executing chain on response body", zap.Error(err))
+					}
+				}
+			}
+
+			resp := &extprocv3.ProcessingResponse{
+				Response: &extprocv3.ProcessingResponse_ResponseBody{
+					ResponseBody: &extprocv3.BodyResponse{
+						Response: &extprocv3.CommonResponse{
+							BodyMutation: s.buildBodyMutation(reqCtx.ResponseBodyBytes, reqCtx.ResponseBodyModified),
+						},
+					},
+				},
+			}
+			if err := stream.Send(resp); err != nil {
+				mylogger.Error("Failed to send ResponseBody response", zap.Error(err))
+				return err
+			}
+
+		case *extprocv3.ProcessingRequest_ResponseTrailers:
+			mylogger.Debug("Received ResponseTrailers phase")
+			trailers := msg.ResponseTrailers.Trailers
+			if trailers != nil {
+				for _, h := range trailers.Headers {
+					key := h.Key
+					var val string
+					if len(h.RawValue) > 0 {
+						val = string(h.RawValue)
+					} else {
+						val = h.Value
+					}
+					reqCtx.Headers[key] = val
+				}
+			}
+
+			if targetChainName != "" {
+				chain, exists := s.registry.Get(targetChainName)
+				if exists {
+					if err := s.executor.Execute(reqCtx, chain); err != nil {
+						mylogger.Error("Error executing chain on response trailers", zap.Error(err))
+					}
+				}
+			}
+
+			resp := &extprocv3.ProcessingResponse{
+				Response: &extprocv3.ProcessingResponse_ResponseTrailers{
+					ResponseTrailers: &extprocv3.TrailersResponse{
+						HeaderMutation: s.buildHeaderMutation(reqCtx.ResponseTrailersToAdd, reqCtx.ResponseTrailersToRemove),
+					},
+				},
+			}
+			if err := stream.Send(resp); err != nil {
+				mylogger.Error("Failed to send ResponseTrailers response", zap.Error(err))
+				return err
+			}
+		}
 	}
+}
 
-	mylogger.Debug("gRPC check request allowed",
-		zap.String("path", reqCtx.Path),
-		zap.String("method", reqCtx.Method),
-		zap.Duration("latency", latency),
-		zap.String("decision", "ALLOW"),
-	)
-
-	okResponse := &authv3.OkHttpResponse{}
-
-	for _, h := range reqCtx.HeadersToAdd {
-		opt := &corev3.HeaderValueOption{
+func (s *Server) buildHeaderMutation(headers []engine.Header, removes []string) *extprocv3.HeaderMutation {
+	var setHeaders []*corev3.HeaderValueOption
+	for _, h := range headers {
+		setHeaders = append(setHeaders, &corev3.HeaderValueOption{
 			Header: &corev3.HeaderValue{
-				Key:   h.Key,
-				Value: h.Value,
+				Key:      h.Key,
+				RawValue: []byte(h.Value),
 			},
 			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
-		}
-		okResponse.Headers = append(okResponse.Headers, opt)
+		})
 	}
+	return &extprocv3.HeaderMutation{
+		SetHeaders:    setHeaders,
+		RemoveHeaders: removes,
+	}
+}
 
-	for _, h := range reqCtx.ResponseHeadersToAdd {
-		opt := &corev3.HeaderValueOption{
-			Header: &corev3.HeaderValue{
-				Key:   h.Key,
-				Value: h.Value,
+func (s *Server) buildBodyMutation(body []byte, modified bool) *extprocv3.BodyMutation {
+	if !modified {
+		return nil
+	}
+	if len(body) == 0 {
+		return &extprocv3.BodyMutation{
+			Mutation: &extprocv3.BodyMutation_ClearBody{
+				ClearBody: true,
 			},
-			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 		}
-		okResponse.ResponseHeadersToAdd = append(okResponse.ResponseHeadersToAdd, opt)
+	}
+	return &extprocv3.BodyMutation{
+		Mutation: &extprocv3.BodyMutation_Body{
+			Body: body,
+		},
+	}
+}
+
+func (s *Server) buildModeOverride(reqCtx *engine.RequestContext) *extprocfilterv3.ProcessingMode {
+	if !reqCtx.RequestBodyRequired && !reqCtx.ResponseBodyRequired && !reqCtx.RequestTrailersRequired && !reqCtx.ResponseTrailersRequired {
+		return nil
 	}
 
-	okResponse.HeadersToRemove = append(okResponse.HeadersToRemove, reqCtx.HeadersToRemove...)
+	mode := &extprocfilterv3.ProcessingMode{
+		RequestHeaderMode:  extprocfilterv3.ProcessingMode_SEND,
+		ResponseHeaderMode: extprocfilterv3.ProcessingMode_SEND,
+	}
 
-	return &authv3.CheckResponse{
-		Status: &rpcstatus.Status{
-			Code: int32(codes.OK),
-		},
-		HttpResponse: &authv3.CheckResponse_OkResponse{
-			OkResponse: okResponse,
-		},
-	}, nil
+	if reqCtx.RequestBodyRequired {
+		mode.RequestBodyMode = extprocfilterv3.ProcessingMode_BUFFERED
+	} else {
+		mode.RequestBodyMode = extprocfilterv3.ProcessingMode_NONE
+	}
+
+	if reqCtx.ResponseBodyRequired {
+		mode.ResponseBodyMode = extprocfilterv3.ProcessingMode_BUFFERED
+	} else {
+		mode.ResponseBodyMode = extprocfilterv3.ProcessingMode_NONE
+	}
+
+	if reqCtx.RequestTrailersRequired {
+		mode.RequestTrailerMode = extprocfilterv3.ProcessingMode_SEND
+	} else {
+		mode.RequestTrailerMode = extprocfilterv3.ProcessingMode_SKIP
+	}
+
+	if reqCtx.ResponseTrailersRequired {
+		mode.ResponseTrailerMode = extprocfilterv3.ProcessingMode_SEND
+	} else {
+		mode.ResponseTrailerMode = extprocfilterv3.ProcessingMode_SKIP
+	}
+
+	return mode
 }

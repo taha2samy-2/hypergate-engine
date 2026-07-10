@@ -1,0 +1,126 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: hyper-validating-webhook-configuration
+  annotations:
+    cert-manager.io/inject-ca-from: hyper-system/hyper-operator-cert
+webhooks:
+  - name: vhyperchain.kb.io
+    clientConfig:
+      service:
+        name: hyper-operator
+        namespace: hyper-system
+        path: /validate-hyper-io-v1alpha1-hyperchain
+    failurePolicy: Fail
+    rules:
+      - apiGroups: ["hyper.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["hyperchains"]
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+
+  - name: vcorridf.kb.io
+    clientConfig:
+      service:
+        name: hyper-operator
+        namespace: hyper-system
+        path: /validate-hyper-io-v1alpha1-correlationidfilter
+    failurePolicy: Fail
+    rules:
+      - apiGroups: ["hyper.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["DELETE"]
+        resources: ["correlationidfilters"]
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+
+  - name: vdeny.kb.io
+    clientConfig:
+      service:
+        name: hyper-operator
+        namespace: hyper-system
+        path: /validate-hyper-io-v1alpha1-denyfilter
+    failurePolicy: Fail
+    rules:
+      - apiGroups: ["hyper.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["DELETE"]
+        resources: ["denyfilters"]
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+
+  - name: vhmf.kb.io
+    clientConfig:
+      service:
+        name: hyper-operator
+        namespace: hyper-system
+        path: /validate-hyper-io-v1alpha1-headermodifierfilter
+    failurePolicy: Fail
+    rules:
+      - apiGroups: ["hyper.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["DELETE"]
+        resources: ["headermodifierfilters"]
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+
+  - name: voidcf.kb.io
+    clientConfig:
+      service:
+        name: hyper-operator
+        namespace: hyper-system
+        path: /validate-hyper-io-v1alpha1-oidcfilter
+    failurePolicy: Fail
+    rules:
+      - apiGroups: ["hyper.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["DELETE"]
+        resources: ["oidcfilters"]
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+
+  - name: vrlf.kb.io
+    clientConfig:
+      service:
+        name: hyper-operator
+        namespace: hyper-system
+        path: /validate-hyper-io-v1alpha1-ratelimitfilter
+    failurePolicy: Fail
+    rules:
+      - apiGroups: ["hyper.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["DELETE"]
+        resources: ["ratelimitfilters"]
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+
+  - name: vrmef.kb.io
+    clientConfig:
+      service:
+        name: hyper-operator
+        namespace: hyper-system
+        path: /validate-hyper-io-v1alpha1-redismetadataenricherfilter
+    failurePolicy: Fail
+    rules:
+      - apiGroups: ["hyper.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["DELETE"]
+        resources: ["redismetadataenricherfilters"]
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+
+  - name: vapikeyf.kb.io
+    clientConfig:
+      service:
+        name: hyper-operator
+        namespace: hyper-system
+        path: /validate-hyper-io-v1alpha1-apikeyfilter
+    failurePolicy: Fail
+    rules:
+      - apiGroups: ["hyper.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["DELETE"]
+        resources: ["apikeyfilters"]
+    admissionReviewVersions: ["v1"]
+    sideEffects: None

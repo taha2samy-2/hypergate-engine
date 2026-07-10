@@ -22,6 +22,7 @@ const (
 	RedisStatePending   RedisState = "Pending"
 )
 
+// +kubebuilder:object:generate=true
 // HyperRedisSpec defines the desired state of HyperRedis
 type HyperRedisSpec struct {
 	// +kubebuilder:validation:Required
@@ -41,10 +42,11 @@ type HyperRedisSpec struct {
 	ActiveConnHealthCheck bool `json:"activeConnHealthCheck,omitempty"`
 }
 
+// +kubebuilder:object:generate=true
 // HyperRedisStatus defines the observed state of HyperRedis
 type HyperRedisStatus struct {
-	State      RedisState  `json:"state,omitempty"`
-	LastCheck  metav1.Time `json:"lastCheck,omitempty"`
+	State     RedisState  `json:"state,omitempty"`
+	LastCheck metav1.Time `json:"lastCheck,omitempty"`
 }
 
 // +kubebuilder:object:root=true

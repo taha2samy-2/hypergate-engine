@@ -79,17 +79,26 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.HyperRouteReconciler{
+	if err = (&controller.HyperChainMasterCompilerReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "HyperRoute")
+		setupLog.Error(err, "unable to create controller", "controller", "HyperChainMasterCompiler")
 		os.Exit(1)
 	}
 
-	if err = webhook.SetupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "HyperPolicy")
-		os.Exit(1)
+	enableWebhooks := os.Getenv("ENABLE_WEBHOOKS")
+	if enableWebhooks == "false" {
+		setupLog.Info("Webhooks are explicitly disabled via ENABLE_WEBHOOKS env var, skipping webhook registration.")
+	} else {
+		if err = webhook.SetupFiltersWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhooks", "webhook", "FilterProtection")
+			os.Exit(1)
+		}
+		if err = webhook.SetupHyperChainWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhooks", "webhook", "HyperChainValidation")
+			os.Exit(1)
+		}
 	}
 
 	//+kubebuilder:scaffold:builder

@@ -43,6 +43,9 @@ services:
       dockerfile: Dockerfile
     container_name: hyper-engine
     restart: unless-stopped
+    environment:
+      - CONFIG_PROVIDER=FILE
+      - CONFIG_FILE_PATH=/etc/hyper-engine/config.yaml
     ports:
       - "9001:9001"
     volumes:

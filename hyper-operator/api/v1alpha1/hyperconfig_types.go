@@ -14,6 +14,7 @@ const (
 	LogLevelError LogLevel = "ERROR"
 )
 
+// +kubebuilder:object:generate=true
 // HyperConfigSpec defines the desired state of HyperConfig
 type HyperConfigSpec struct {
 	// +kubebuilder:default="0.0.0.0:9001"
@@ -39,8 +40,12 @@ type HyperConfigSpec struct {
 
 	// +kubebuilder:validation:Required
 	RedisServiceRef string `json:"redisServiceRef"`
+
+	// +optional
+	DefaultChain string `json:"defaultChain,omitempty"`
 }
 
+// +kubebuilder:object:generate=true
 // HyperConfigStatus defines the observed state of HyperConfig
 type HyperConfigStatus struct {
 }

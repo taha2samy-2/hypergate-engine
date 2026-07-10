@@ -10,9 +10,28 @@ permissions:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: hyper-engine
+            context: .
+            file: ./Dockerfile
+            tag: "0.1.0-alpha.1"
+          - name: hyper-operator
+            context: .
+            file: ./hyper-operator/Dockerfile
+            tag: "0.1.0-alpha.1"
+          - name: hyper-mock-engine
+            context: ./mock_engine
+            file: ./mock_engine/Dockerfile.mock
+            tag: "1.0.0"
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Downcase Owner Name
+        run: |
+          echo "OWNER_LOWER=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_ENV
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
@@ -27,32 +46,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build & Push Engine
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
+      - name: Build & Push Image
+        uses: docker/build-push-action@v5
         with:
-          context: .
-          file: ./Dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/hyper-engine:1.0.0
-
-      - name: Build & Push Operator
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
-        with:
-          context: .
-          file: ./hyper-operator/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ghcr.io/${{ github.repository_owner }}/hyper-operator:1.0.0
-
-      - name: Build & Push Mock Engine
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
-        with:
-          context: ./mock_engine
-          file: ./mock_engine/Dockerfile.mock
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ghcr.io/${{ github.repository_owner }}/hyper-mock-engine:1.0.0
+          tags: ghcr.io/${{ env.OWNER_LOWER }}/${{ matrix.name }}:${{ matrix.tag }}
 
   cleanup:
     needs: build-and-push
@@ -64,6 +65,8 @@ jobs:
         uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          owner: ${{ github.repository_owner }}
+          packages: 'hyper-engine,hyper-operator,hyper-mock-engine'
           delete-untagged: true
           delete-ghost-images: true
           delete-partial-images: true

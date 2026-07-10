@@ -1,0 +1,32 @@
+{
+    "name": "hyper_engine",
+    "build": {
+        "dockerfile": "dockerfile"
+    },
+    "features": {
+        "ghcr.io/devcontainers/features/docker-in-docker:2": {
+            "version": "latest",
+            "enableNonRootDocker": true,
+            "moby": true
+        },
+        "ghcr.io/devcontainers/features/common-utils:2": {
+            "username": "vscode"
+        }
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-kubernetes-tools.vscode-kubernetes-tools",
+                "redhat.vscode-yaml",
+                "ms-azuretools.vscode-docker",
+                "pkief.material-icon-theme",
+                "task.vscode-task"
+            ],
+            "settings": {
+                "terminal.integrated.defaultProfile.linux": "bash"
+            }
+        }
+    },
+    "remoteUser": "vscode",
+    "postCreateCommand": "echo 'hyper engine Environment is ready!'"
+}

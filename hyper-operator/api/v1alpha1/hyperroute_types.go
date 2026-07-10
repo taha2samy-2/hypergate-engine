@@ -4,6 +4,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:object:generate=true
 type MatchRule struct {
 	// +optional
 	PathPrefix string `json:"pathPrefix,omitempty"`
@@ -15,6 +16,7 @@ type MatchRule struct {
 	Headers map[string]string `json:"headers,omitempty"`
 }
 
+// +kubebuilder:object:generate=true
 // HyperRouteSpec defines the desired state of HyperRoute
 type HyperRouteSpec struct {
 	// +kubebuilder:validation:Required
@@ -27,6 +29,7 @@ type HyperRouteSpec struct {
 	Matches []MatchRule `json:"matches"`
 }
 
+// +kubebuilder:object:generate=true
 // HyperRouteStatus defines the observed state of HyperRoute
 type HyperRouteStatus struct {
 }

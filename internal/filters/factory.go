@@ -5,6 +5,7 @@ import (
 
 	"github.com/taha/myprog/internal/config"
 	"github.com/taha/myprog/internal/engine"
+	"github.com/taha/myprog/internal/filters/api_key"
 	"github.com/taha/myprog/internal/filters/correlation_id"
 	"github.com/taha/myprog/internal/filters/deny"
 	"github.com/taha/myprog/internal/filters/header_modifier"
@@ -23,6 +24,32 @@ func CreateFilter(filterType string, rawOptions interface{}) (engine.Filter, err
 	}
 
 	switch filterType {
+	case "api_key":
+		var cfg config.APIKeyFilterConfig
+		if err := yaml.Unmarshal(optsBytes, &cfg); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal config for api_key: %w", err)
+		}
+
+		if err := cfg.ApplyDefaults(); err != nil {
+			return nil, fmt.Errorf("failed to apply defaults/validate config for api_key: %w", err)
+		}
+
+		// Verify global Redis connection manager is fully initialized
+		if redis.GlobalManager == nil {
+			return nil, fmt.Errorf("global redis manager is not initialized")
+		}
+
+		// Resolve the specific connection pool client at boot-time
+		client, ok := redis.GlobalManager.GetClient(cfg.RedisService)
+		if !ok {
+			return nil, fmt.Errorf("configured redis service %s not found in manager", cfg.RedisService)
+		}
+
+		// We will implement the concrete api_key package in the next step.
+		// For now, return a placeholder or comment it so it compiles.
+		// Example stub:
+		return api_key.NewAPIKeyFilter("api_key", cfg, client), nil
+
 	case "redis_metadata_enricher":
 		var cfg config.RedisMetadataEnricherConfig
 		if err := yaml.Unmarshal(optsBytes, &cfg); err != nil {

@@ -1,0 +1,48 @@
+name: 'Build, Push and Attest with Docker Bake'
+description: 'Multi-platform build using Docker Bake and GitHub Artifact Attestations'
+inputs:
+  target:
+    description: 'Bake target (engine or operator)'
+    required: true
+  image_tag:
+    description: 'Tag of the image'
+    required: true
+  registry:
+    description: 'Container registry'
+    required: false
+    default: 'ghcr.io/taha2samy-2'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build and Push with Docker Bake
+      id: bake
+      uses: docker/bake-action@v3
+      with:
+        targets: ${{ inputs.target }}
+        push: true
+        set: |
+          *.args.TAG=${{ inputs.image_tag }}
+          *.args.REGISTRY=${{ inputs.registry }}
+          *.cache-from=type=gha
+          *.cache-to=type=gha,mode=max
+
+    - name: Extract Image Digest
+      id: digest
+      shell: bash
+      run: |
+        DIGEST=$(echo '${{ steps.bake.outputs.metadata }}' | jq -r '.[keys[0]]["containerimage.digest"]')
+        echo "value=$DIGEST" >> $GITHUB_OUTPUT
+
+    - name: Attest Build Provenance
+      uses: actions/attest@v4
+      with:
+        subject-name: ${{ inputs.registry }}/hyper-${{ inputs.target }}
+        subject-digest: ${{ steps.digest.outputs.value }}
+        push-to-registry: true

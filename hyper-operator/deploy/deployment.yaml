@@ -6,7 +6,7 @@ metadata:
   labels:
     control-plane: controller-manager
 spec:
-  replicas: 1 # Leader election is enabled, 1 is perfect, can be 2 for HA
+  replicas: 1 
   selector:
     matchLabels:
       control-plane: controller-manager
@@ -18,12 +18,23 @@ spec:
       serviceAccountName: hyper-operator-sa
       containers:
         - name: manager
-          image: taha/hyper-operator:latest # ◄ الـ Image بتاعتك
+          image: ghcr.io/taha2samy-2/hyper-operator:0.1.0-alpha.1
           imagePullPolicy: IfNotPresent
           command:
             - /manager
           args:
             - --leader-elect
+          env:
+            - name: ENABLE_WEBHOOKS
+              value: "true" # Webhooks enabled
+          ports:
+            - containerPort: 9443 # Default port for the webhook server
+              name: webhook-server
+              protocol: TCP
+          volumeMounts:
+            - mountPath: /tmp/k8s-webhook-server/serving-certs
+              name: cert
+              readOnly: true
           resources:
             limits:
               cpu: 500m
@@ -35,4 +46,9 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             runAsNonRoot: true
+      volumes:
+        - name: cert
+          secret:
+            defaultMode: 420
+            secretName: webhook-server-cert
       terminationGracePeriodSeconds: 10

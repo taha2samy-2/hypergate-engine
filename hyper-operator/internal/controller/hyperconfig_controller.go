@@ -126,7 +126,6 @@ func (r *HyperConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	// 4. DaemonSet
 	ds := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: dsName, Namespace: namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, ds, func() error {
 		labels := map[string]string{"app": "hyper-engine"}
@@ -135,7 +134,7 @@ func (r *HyperConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 		ds.Spec.Template.ObjectMeta.Labels = labels
 		ds.Spec.Template.Spec.ServiceAccountName = saName
-		
+
 		container := corev1.Container{
 			Name:  "engine",
 			Image: engineImage,
@@ -147,24 +146,28 @@ func (r *HyperConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			},
 			Env: []corev1.EnvVar{
 				{
-					Name:  "CONFIG_MODE",
-					Value: "k8s",
+					Name:  "CONFIG_PROVIDER",
+					Value: "K8S",
 				},
 				{
-					Name:  "CONFIG_MAP_NAME",
+					Name:  "CONFIG_K8S_NAME",
 					Value: "hyper-engine-config",
+				},
+				{
+					Name:  "CONFIG_K8S_NAMESPACE",
+					Value: namespace,
 				},
 			},
 		}
-		
+
 		ds.Spec.Template.Spec.Containers = []corev1.Container{container}
+		ds.Spec.Template.Spec.Volumes = nil
 		return ctrl.SetControllerReference(&hyperConfig, ds, r.Scheme)
 	}); err != nil {
 		logger.Error(err, "failed to reconcile DaemonSet")
 		return ctrl.Result{}, err
 	}
 
-	// 5. Service
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: svcName, Namespace: namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
 		svc.Spec.Selector = map[string]string{"app": "hyper-engine"}
@@ -176,6 +179,8 @@ func (r *HyperConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				Protocol:   corev1.ProtocolTCP,
 			},
 		}
+		td := "PreferSameNode"
+		svc.Spec.TrafficDistribution = &td
 		return ctrl.SetControllerReference(&hyperConfig, svc, r.Scheme)
 	}); err != nil {
 		logger.Error(err, "failed to reconcile Service")

@@ -1,44 +1,115 @@
 package config
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"regexp"
+	"time"
 
 	"gopkg.in/yaml.v3"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 const (
 	DefaultConfigPath = "/etc/hyper-engine/config.yaml"
-	EnvConfigPath     = "ENGINE_CONFIG_PATH"
+	EnvConfigPath     = "CONFIG_FILE_PATH"
+	EnvConfigProvider = "CONFIG_PROVIDER"
+	EnvConfigURL      = "CONFIG_URL"
 )
 
-// LoadConfig discovers the config path, parses the configuration, and returns the path used and the config.
 func LoadConfig() (*Config, string, error) {
-	configPath := DefaultConfigPath
-
-	// 1. Check Environment Variable Fallback
-	if envPath := os.Getenv(EnvConfigPath); envPath != "" {
-		configPath = envPath
+	provider := os.Getenv(EnvConfigProvider)
+	if provider == "" {
+		provider = "FILE"
 	}
 
-	// 2. CLI Parsing
-	fs := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
-	var cliConfig, cliConfigShort string
-	fs.StringVar(&cliConfig, "config", "", "Path to config file")
-	fs.StringVar(&cliConfigShort, "c", "", "Path to config file (shorthand)")
+	var data []byte
+	var err error
+	configPath := ""
 
-	if err := fs.Parse(os.Args[1:]); err == nil {
-		if cliConfigShort != "" {
-			configPath = cliConfigShort
+	if provider == "K8S" {
+		config, err := rest.InClusterConfig()
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to load in-cluster config: %w", err)
 		}
+		clientset, err := kubernetes.NewForConfig(config)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to create kubernetes client: %w", err)
+		}
+
+		cmName := os.Getenv("CONFIG_K8S_NAME")
+		if cmName == "" {
+			cmName = "hyper-engine-config"
+		}
+		namespace := os.Getenv("CONFIG_K8S_NAMESPACE")
+		if namespace == "" {
+			namespace = "hyper-system"
+		}
+
+		cm, err := clientset.CoreV1().ConfigMaps(namespace).Get(context.Background(), cmName, metav1.GetOptions{})
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to get configmap %s: %w", cmName, err)
+		}
+
+		yamlContent, ok := cm.Data["config.yaml"]
+		if !ok {
+			return nil, "", fmt.Errorf("config.yaml not found in configmap %s", cmName)
+		}
+		data = []byte(yamlContent)
+		configPath = cmName
+	} else if provider == "URL" {
+		configURL := os.Getenv(EnvConfigURL)
+		if configURL == "" {
+			return nil, "", fmt.Errorf("config provider set to URL but CONFIG_URL is empty")
+		}
+		configPath = configURL
+
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Get(configURL)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to fetch remote config: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, "", fmt.Errorf("remote config server returned non-200 status: %d", resp.StatusCode)
+		}
+
+		data, err = io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to read remote config body: %w", err)
+		}
+	} else {
+		configPath = DefaultConfigPath
+		if envPath := os.Getenv(EnvConfigPath); envPath != "" {
+			configPath = envPath
+		}
+
+		fs := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+		var cliConfig, cliConfigShort string
+		fs.StringVar(&cliConfig, "config", "", "Path to config file")
+		fs.StringVar(&cliConfigShort, "c", "", "Path to config file")
+		_ = fs.Parse(os.Args[1:])
+
 		if cliConfig != "" {
 			configPath = cliConfig
+		} else if cliConfigShort != "" {
+			configPath = cliConfigShort
+		}
+
+		data, err = os.ReadFile(configPath)
+		if err != nil {
+			return nil, configPath, fmt.Errorf("failed to read config file %q: %w", configPath, err)
 		}
 	}
 
-	cfg, err := ParseFile(configPath)
+	cfg, err := ParseBytes(data)
 	if err != nil {
 		return nil, configPath, err
 	}
@@ -46,13 +117,7 @@ func LoadConfig() (*Config, string, error) {
 	return cfg, configPath, nil
 }
 
-// ParseFile reads, unmarshals, validates, and pre-compiles the YAML configuration from a given file.
-func ParseFile(configPath string) (*Config, error) {
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read config file %q: %w", configPath, err)
-	}
-
+func ParseBytes(data []byte) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config YAML: %w", err)
@@ -72,7 +137,6 @@ func ParseFile(configPath string) (*Config, error) {
 		cfg.Telemetry.Logging.OutputPath = "stdout"
 	}
 
-	// 4. Pre-compile Regex Patterns (Crucial for Zero-Allocation Request Path)
 	for i, route := range cfg.Router.Routes {
 		for j, match := range route.Matches {
 			if match.PathRegexPattern != "" {

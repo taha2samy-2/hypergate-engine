@@ -1,0 +1,7 @@
+apiVersion: "cilium.io/v2"
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: "gateway-pool"
+spec:
+  blocks:
+  - cidr: "172.18.255.200/29" 
