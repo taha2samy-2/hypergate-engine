@@ -8,7 +8,6 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-
 	"go.uber.org/zap"
 
 	"github.com/taha/myprog/internal/config"
