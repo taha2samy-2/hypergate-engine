@@ -1,0 +1,37 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:best-practices",
+    ":gitSignOff"
+  ],
+  "prConcurrentLimit": 0,
+  "prHourlyLimit": 0,
+  "rebaseWhen": "auto",
+  "major": {
+    "enabled": false
+  },
+  "packageRules": [
+    {
+      "matchManagers": ["gomod"],
+      "matchFileNames": ["go.mod", "go.sum"],
+      "groupName": "Go Dependencies",
+      "groupSlug": "go-deps"
+    },
+    {
+      "matchManagers": ["pipenv"],
+      "matchFileNames": ["Pipfile", "Pipfile.lock"],
+      "groupName": "Python Dependencies",
+      "groupSlug": "python-deps"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions Dependencies",
+      "groupSlug": "gh-actions-deps"
+    },
+    {
+      "matchManagers": ["dockerfile"],
+      "groupName": "Base Images Dependencies",
+      "groupSlug": "docker-base-deps"
+    }
+  ]
+}
