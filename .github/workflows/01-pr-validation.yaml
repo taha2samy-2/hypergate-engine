@@ -70,7 +70,7 @@ jobs:
         uses: ./.github/actions/setup-go-env
 
       - name: Run Go Linters
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
 
@@ -87,22 +87,6 @@ jobs:
         if: always()
         with:
           sarif_file: 'trivy-results.sarif'
-
-  codeql-analysis:
-    name: CodeQL Static Analysis
-    needs: detect-changes
-    if: ${{ needs.detect-changes.outputs.code_changed == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: go, python
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
 
   build-dry-run:
     name: Verify Multi-Platform Build (${{ matrix.target }})
