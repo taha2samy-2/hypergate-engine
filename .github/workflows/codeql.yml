@@ -11,6 +11,7 @@ on:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
+    if: ${{ github.actor != 'dependabot[bot]' && github.actor != 'github-actions[bot]' && !startsWith(github.head_ref, 'renovate/') && !startsWith(github.head_ref, 'dependabot/') }}
     runs-on: ubuntu-latest
     permissions:
       security-events: write
