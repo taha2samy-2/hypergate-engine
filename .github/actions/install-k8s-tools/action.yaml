@@ -1,0 +1,10 @@
+name: 'Install Kubernetes Toolchain with Mise'
+description: 'Installs all required tools dynamically using Mise-en-place'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install and Configure Tools via Mise
+      uses: jdx/mise-action@v2
+      with:
+        cache: true
