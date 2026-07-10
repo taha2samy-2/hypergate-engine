@@ -1,0 +1,5 @@
+paths:
+  .github/workflows/*.yaml:
+    ignore:
+      - "expression '.*' is not of type"
+      - "property '.*' is not defined in object type"
